@@ -10,7 +10,7 @@ pub struct CityData {
     pub city: String,
     pub slug: String,
     pub weather: Vec<WeatherMonth>,
-    pub arrivals: ArrivalData,
+    pub arrivals: ArrivalsData,
     pub holidays: Vec<Holiday>,
     pub notes: Vec<Note>,
 }
@@ -29,7 +29,7 @@ pub struct WeatherMonth {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ArrivalData {
+pub struct ArrivalsData {
     pub years: Vec<i32>,
     pub data: Vec<ArrivalEntry>,
     pub monthly_index: Vec<MonthlyIndex>,
@@ -38,8 +38,8 @@ pub struct ArrivalData {
 #[derive(Debug, Clone, Serialize)]
 pub struct ArrivalEntry {
     pub year: i32,
-    pub month: i32,
-    pub visitor_thousands: i32,
+    pub month: i8,
+    pub visitors_thousands: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
