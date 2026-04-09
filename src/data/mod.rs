@@ -41,6 +41,86 @@ struct NoteRow {
     note: String,
 }
 
+fn parse_weather(path: &Path) -> Result<Vec<WeatherRow>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let r = result?;
+        rows.push(WeatherRow {
+            city: r[0].to_string(),
+            month: r[1].to_string(),
+            avg_high_c: r[2].parse()?,
+            avg_low_c: r[3].parse()?,
+            humidity_pct: r[4].parse()?,
+            rainfall_mm: r[5].parse()?,
+            rain_days: r[6].parse()?,
+            heat_index_c: r[7].parse()?,
+            typhoon_risk: r[8].to_string(),
+            notes: r[9].to_string(),
+        });
+    }
+
+    Ok(rows)
+}
+
+fn parse_arrival(path: &Path) -> Result<Vec<ArrivalRow>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let r = result?;
+        rows.push(ArrivalRow {
+            city: r[0].to_string(),
+            year: r[1].parse()?,
+            month: r[2].to_string(),
+            visitors_thousands: r[3].parse()?,
+        });
+    }
+
+    Ok(rows)
+}
+
+fn parse_holidays(path: &Path) -> Result<Vec<HolidayRow>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let r = result?;
+        rows.push(HolidayRow {
+            city: r[0].to_string(),
+            holiday: r[1].to_string(),
+            typical_period: r[2].to_string(),
+            crowd_impact: r[4].to_string(),
+            price_impact: r[5].to_string(),
+            closure_impact: r[6].to_string(),
+            notes: r[7].to_string(),
+        });
+    }
+
+    Ok(rows)
+}
+
+fn parse_notes(path: &Path) -> Result<Vec<NoteRow>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let r = result?;
+        rows.push(NoteRow {
+            city: r[0].to_string(),
+            category: r[1].parse()?,
+            note: r[2].to_string(),
+        });
+    }
+
+    Ok(rows)
+}
+
 pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
     todo!()
 }
