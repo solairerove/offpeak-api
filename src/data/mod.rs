@@ -1,6 +1,7 @@
 pub mod models;
 
 use models::*;
+use std::collections::HashMap;
 use std::path::Path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -65,7 +66,7 @@ fn parse_weather(path: &Path) -> Result<Vec<WeatherRow>> {
     Ok(rows)
 }
 
-fn parse_arrival(path: &Path) -> Result<Vec<ArrivalRow>> {
+fn parse_arrivals(path: &Path) -> Result<Vec<ArrivalRow>> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_path(path)?;
@@ -122,7 +123,113 @@ fn parse_notes(path: &Path) -> Result<Vec<NoteRow>> {
 }
 
 pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
-    todo!()
+    let weather_rows = parse_weather(&data_dir.join("Weather.csv"))?;
+    let arrival_rows = parse_arrivals(&data_dir.join("Arrivals.csv"))?;
+    let holiday_rows = parse_holidays(&data_dir.join("Holidays.csv"))?;
+    let note_rows = parse_notes(&data_dir.join("Notes.csv"))?;
+
+    let cities = build_cities(weather_rows, arrival_rows, holiday_rows, note_rows);
+    Ok(AppData { cities })
+}
+
+fn build_cities(
+    weather_rows: Vec<WeatherRow>,
+    arrival_rows: Vec<ArrivalRow>,
+    holiday_rows: Vec<HolidayRow>,
+    note_rows: Vec<NoteRow>,
+) -> HashMap<String, CityData> {
+    let mut cities: HashMap<String, CityData> = HashMap::new();
+
+    let general_notes: Vec<Note> = note_rows
+        .iter()
+        .filter(|r| r.city.trim().eq_ignore_ascii_case("general"))
+        .map(|r| Note {
+            category: r.category.to_lowercase(),
+            text: r.note.clone(),
+        })
+        .collect();
+
+    for row in &weather_rows {
+        let slug = city_to_slug(&row.city);
+        let entry = cities.entry(slug.clone()).or_insert_with(|| CityData {
+            slug: slug.clone(),
+            city: row.city.clone(),
+            weather: vec![],
+            arrivals: ArrivalsData {
+                years: vec![],
+                data: vec![],
+                monthly_index: vec![],
+            },
+            holidays: vec![],
+            notes: vec![],
+        });
+        entry.weather.push(WeatherMonth {
+            month: month_str_to_num(&row.month) as u8,
+            avg_high_c: row.avg_high_c,
+            avg_low_c: row.avg_low_c,
+            humidity_pct: row.humidity_pct,
+            rainfall_mm: row.rainfall_mm,
+            rain_days: row.rain_days,
+            heat_index_c: row.heat_index_c,
+            typhoon_risk: row.typhoon_risk.to_lowercase(),
+            notes: row.notes.clone(),
+        });
+    }
+
+    for row in &arrival_rows {
+        let slug = city_to_slug(&row.city);
+        if let Some(city) = cities.get_mut(&slug) {
+            let year = row.year;
+            if !city.arrivals.years.contains(&year) {
+                city.arrivals.years.push(year);
+            }
+            city.arrivals.data.push(ArrivalEntry {
+                year,
+                month: month_str_to_num(&row.month),
+                visitors_thousands: row.visitors_thousands,
+            });
+        }
+    }
+
+    for city in cities.values_mut() {
+        city.arrivals.years.sort_unstable();
+        city.arrivals.monthly_index = crate::scoring::compute_monthly_index(&city.arrivals.data);
+    }
+
+    for row in &holiday_rows {
+        let slug = city_to_slug(&row.city);
+        if let Some(city) = cities.get_mut(&slug) {
+            let (start, end) = parse_typical_period(&row.typical_period);
+            city.holidays.push(Holiday {
+                name: row.holiday.clone(),
+                typical_month_start: start,
+                typical_month_end: end,
+                crowd_impact: normalise_crowd(&row.crowd_impact).to_string(),
+                price_impact: normalise_price(&row.price_impact).to_string(),
+                closure_impact: normalise_closure(&row.closure_impact).to_string(),
+                notes: row.notes.clone(),
+            });
+        }
+    }
+
+    for row in &note_rows {
+        if row.city.trim().eq_ignore_ascii_case("general") {
+            continue;
+        }
+        let slug = city_to_slug(&row.city);
+        if let Some(city) = cities.get_mut(&slug) {
+            city.notes.push(Note {
+                category: row.category.to_lowercase(),
+                text: row.note.clone(),
+            });
+        }
+    }
+
+    for city in cities.values_mut() {
+        city.notes.extend(general_notes.clone());
+    }
+
+    cities
 }
 
 fn city_to_slug(city: &str) -> String {
