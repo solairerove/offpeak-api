@@ -1,3 +1,4 @@
-fn main() {
-    println!("Hello, world!");
-}
+mod data;
+mod scoring;
+
+fn main() {}
