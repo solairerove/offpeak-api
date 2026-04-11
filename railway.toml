@@ -1,0 +1,8 @@
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "offpeak-api"
+healthcheckPath = "/api/v1/cities"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
