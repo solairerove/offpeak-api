@@ -15,9 +15,9 @@ pub fn create_router(data: Arc<AppData>) -> Router {
 
     Router::new()
         .route("/api/v1/cities", get(list_cities))
-        .route("/api/v1/cities/:slug", get(get_city))
-        .route("/api/v1/cities/:slug/weather", get(get_city_weather))
-        .route("/api/v1/cities/:slug/arrivals", get(get_city_arrivals))
+        .route("/api/v1/cities/{slug}", get(get_city))
+        .route("/api/v1/cities/{slug}/weather", get(get_city_weather))
+        .route("/api/v1/cities/{slug}/arrivals", get(get_city_arrivals))
         .with_state(data)
         .layer(cors)
 }
