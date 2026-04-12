@@ -21,7 +21,12 @@ async fn main() {
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|e| panic!("Failed to bind to address '{}': {}", addr, e));
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to bind to '{}': {}. Use PORT=<n> to choose a different port.",
+                addr, e
+            )
+        });
 
     println!("offpeak-api: {} cities loaded", city_count);
     println!("Listening on http://{}", addr);
