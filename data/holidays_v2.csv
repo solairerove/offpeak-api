@@ -1,0 +1,11 @@
+id,city_slug,name,crowd_impact,price_impact,closure_impact,notes
+cny-hk,hong-kong,Chinese New Year,extreme,high,significant,Worst time for budget travel. Great for atmosphere.
+golden-week-hk,hong-kong,Golden Week (China),very_high,high,none,Mainland tourists flood in. Book everything early.
+easter-hk,hong-kong,Easter,moderate,moderate,none,Western tourists + local holidays.
+christmas-hk,hong-kong,Christmas / NYE,high,high,none,City decorated. Shopping sales.
+mid-autumn-hk,hong-kong,Mid-Autumn Festival,low,none,minimal,"Lanterns, mooncakes. Tourist bonus not problem."
+dragon-boat-hk,hong-kong,Dragon Boat Festival,low,none,minimal,Races are worth seeing.
+tet-vn,da-nang,Tet (Lunar New Year),extreme,high,significant,Locals travel home. Tourist services shut down. Not just crowds — no services.
+reunification-vn,da-nang,Reunification Day + Labour Day,high,moderate,minimal,Domestic tourism spike.
+national-day-vn,da-nang,National Day,low,none,minimal,Low season anyway.
+fireworks-dn,da-nang,Da Nang Fireworks Festival,very_high,high,none,International event. Hotels book out. Check dates yearly.

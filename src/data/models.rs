@@ -50,13 +50,30 @@ pub struct MonthlyIndex {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Holiday {
+    pub id: String,
     pub name: String,
-    pub typical_month_start: u8,
-    pub typical_month_end: u8,
     pub crowd_impact: String,
     pub price_impact: String,
     pub closure_impact: String,
     pub notes: String,
+    /// All known occurrences, sorted by (year, date_start).
+    /// Multiple entries with the same year are valid — some lunisolar events
+    /// (e.g. Galungan on Bali's 210-day Pawukon cycle) fall twice in a
+    /// Gregorian year.
+    pub occurrences: Vec<HolidayOccurrence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HolidayOccurrence {
+    pub year: i32,
+    /// ISO 8601: "YYYY-MM-DD". Gregorian year of event start.
+    pub date_start: String,
+    /// ISO 8601: "YYYY-MM-DD". May be in year+1 for Dec→Jan events.
+    pub date_end: String,
+    /// Derived from date_start at load time; not stored in CSV.
+    pub month_start: u8,
+    /// Derived from date_end at load time; not stored in CSV.
+    pub month_end: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]

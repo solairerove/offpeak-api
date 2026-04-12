@@ -6,6 +6,8 @@ use std::path::Path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+// ── internal row types (not serialized) ──────────────────────────────────────
+
 struct WeatherRow {
     city: String,
     month: String,
@@ -26,14 +28,24 @@ struct ArrivalRow {
     visitors_thousands: i32,
 }
 
-struct HolidayRow {
-    city: String,
-    holiday: String,
-    typical_period: String,
+/// Intermediate struct for holidays.csv reference table.
+struct HolidayRef {
+    city_slug: String,
+    name: String,
     crowd_impact: String,
     price_impact: String,
     closure_impact: String,
     notes: String,
+}
+
+/// Intermediate struct for occurrences.csv.
+struct OccurrenceRow {
+    holiday_id: String,
+    year: i32,
+    date_start: String,
+    date_end: String,
+    month_start: u8,
+    month_end: u8,
 }
 
 struct NoteRow {
@@ -41,6 +53,8 @@ struct NoteRow {
     category: String,
     note: String,
 }
+
+// ── CSV parsers ───────────────────────────────────────────────────────────────
 
 fn parse_weather(path: &Path) -> Result<Vec<WeatherRow>> {
     let mut rdr = csv::ReaderBuilder::new()
@@ -62,7 +76,6 @@ fn parse_weather(path: &Path) -> Result<Vec<WeatherRow>> {
             notes: r[9].to_string(),
         });
     }
-
     Ok(rows)
 }
 
@@ -80,28 +93,54 @@ fn parse_arrivals(path: &Path) -> Result<Vec<ArrivalRow>> {
             visitors_thousands: r[3].parse()?,
         });
     }
-
     Ok(rows)
 }
 
-fn parse_holidays(path: &Path) -> Result<Vec<HolidayRow>> {
+/// Loads holidays_v2.csv (reference table) into a map keyed by holiday id.
+fn parse_holidays(path: &Path) -> Result<HashMap<String, HolidayRef>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut map = HashMap::new();
+    for result in rdr.records() {
+        let r = result?;
+        let id = r[0].trim().to_string();
+        map.insert(
+            id.clone(),
+            HolidayRef {
+                city_slug: r[1].trim().to_string(),
+                name: r[2].trim().to_string(),
+                crowd_impact: normalise_crowd(r[3].trim()).to_string(),
+                price_impact: normalise_price(r[4].trim()).to_string(),
+                closure_impact: normalise_closure(r[5].trim()).to_string(),
+                notes: r[6].trim().to_string(),
+            },
+        );
+    }
+    Ok(map)
+}
+
+/// Loads occurrences.csv. Multiple rows with the same (holiday_id, year) are
+/// intentional — lunisolar events on sub-annual cycles (e.g. Galungan on
+/// Bali's 210-day Pawukon cycle) produce two occurrences in a Gregorian year.
+fn parse_occurrences(path: &Path) -> Result<Vec<OccurrenceRow>> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_path(path)?;
     let mut rows = Vec::new();
     for result in rdr.records() {
         let r = result?;
-        rows.push(HolidayRow {
-            city: r[0].to_string(),
-            holiday: r[1].to_string(),
-            typical_period: r[2].to_string(),
-            crowd_impact: r[4].to_string(),
-            price_impact: r[5].to_string(),
-            closure_impact: r[6].to_string(),
-            notes: r[7].to_string(),
+        let date_start = r[2].trim().to_string();
+        let date_end = r[3].trim().to_string();
+        rows.push(OccurrenceRow {
+            holiday_id: r[0].trim().to_string(),
+            year: r[1].parse()?,
+            month_start: month_from_iso(&date_start),
+            month_end: month_from_iso(&date_end),
+            date_start,
+            date_end,
         });
     }
-
     Ok(rows)
 }
 
@@ -118,24 +157,35 @@ fn parse_notes(path: &Path) -> Result<Vec<NoteRow>> {
             note: r[2].to_string(),
         });
     }
-
     Ok(rows)
 }
+
+// ── public entry point ────────────────────────────────────────────────────────
 
 pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
     let weather_rows = parse_weather(&data_dir.join("Weather.csv"))?;
     let arrival_rows = parse_arrivals(&data_dir.join("Arrivals.csv"))?;
-    let holiday_rows = parse_holidays(&data_dir.join("Holidays.csv"))?;
     let note_rows = parse_notes(&data_dir.join("Notes.csv"))?;
+    let holiday_refs = parse_holidays(&data_dir.join("holidays_v2.csv"))?;
+    let occurrence_rows = parse_occurrences(&data_dir.join("occurrences.csv"))?;
 
-    let cities = build_cities(weather_rows, arrival_rows, holiday_rows, note_rows);
+    let cities = build_cities(
+        weather_rows,
+        arrival_rows,
+        holiday_refs,
+        occurrence_rows,
+        note_rows,
+    );
     Ok(AppData { cities })
 }
+
+// ── city assembly ─────────────────────────────────────────────────────────────
 
 fn build_cities(
     weather_rows: Vec<WeatherRow>,
     arrival_rows: Vec<ArrivalRow>,
-    holiday_rows: Vec<HolidayRow>,
+    holiday_refs: HashMap<String, HolidayRef>,
+    occurrence_rows: Vec<OccurrenceRow>,
     note_rows: Vec<NoteRow>,
 ) -> HashMap<String, CityData> {
     let mut cities: HashMap<String, CityData> = HashMap::new();
@@ -148,6 +198,59 @@ fn build_cities(
             text: r.note.clone(),
         })
         .collect();
+
+    // ── 1. Build holidays: join reference table with occurrences ──────────────
+
+    // Group occurrences by holiday_id. Multiple entries per (holiday_id, year)
+    // are preserved — they represent separate occurrences within the same year.
+    let mut occ_by_id: HashMap<String, Vec<HolidayOccurrence>> = HashMap::new();
+    for row in &occurrence_rows {
+        occ_by_id
+            .entry(row.holiday_id.clone())
+            .or_default()
+            .push(HolidayOccurrence {
+                year: row.year,
+                date_start: row.date_start.clone(),
+                date_end: row.date_end.clone(),
+                month_start: row.month_start,
+                month_end: row.month_end,
+            });
+    }
+
+    // Startup validation: warn on data gaps, never panic.
+    for id in occ_by_id.keys() {
+        if !holiday_refs.contains_key(id) {
+            println!(
+                "warn: occurrences.csv has unknown holiday_id '{id}' (no matching holidays entry)"
+            );
+        }
+    }
+
+    // Build per-city holiday lists.
+    let mut holidays_by_city: HashMap<String, Vec<Holiday>> = HashMap::new();
+    for (id, href) in &holiday_refs {
+        let mut occs = occ_by_id.remove(id).unwrap_or_default();
+        if occs.is_empty() {
+            println!("warn: holiday '{id}' has zero occurrences in occurrences.csv");
+        }
+        // Sort by year then date_start so multi-occurrence years are in
+        // chronological order (important for the Galungan/Kuningan pattern).
+        occs.sort_by(|a, b| a.year.cmp(&b.year).then(a.date_start.cmp(&b.date_start)));
+        holidays_by_city
+            .entry(href.city_slug.clone())
+            .or_default()
+            .push(Holiday {
+                id: id.clone(),
+                name: href.name.clone(),
+                crowd_impact: href.crowd_impact.clone(),
+                price_impact: href.price_impact.clone(),
+                closure_impact: href.closure_impact.clone(),
+                notes: href.notes.clone(),
+                occurrences: occs,
+            });
+    }
+
+    // ── 2. Weather ────────────────────────────────────────────────────────────
 
     for row in &weather_rows {
         let slug = city_to_slug(&row.city);
@@ -176,6 +279,8 @@ fn build_cities(
         });
     }
 
+    // ── 3. Arrivals ───────────────────────────────────────────────────────────
+
     for row in &arrival_rows {
         let slug = city_to_slug(&row.city);
         if let Some(city) = cities.get_mut(&slug) {
@@ -196,21 +301,19 @@ fn build_cities(
         city.arrivals.monthly_index = crate::scoring::compute_monthly_index(&city.arrivals.data);
     }
 
-    for row in &holiday_rows {
-        let slug = city_to_slug(&row.city);
+    // ── 4. Attach holidays to cities ──────────────────────────────────────────
+
+    for (slug, holidays) in holidays_by_city {
         if let Some(city) = cities.get_mut(&slug) {
-            let (start, end) = parse_typical_period(&row.typical_period);
-            city.holidays.push(Holiday {
-                name: row.holiday.clone(),
-                typical_month_start: start,
-                typical_month_end: end,
-                crowd_impact: normalise_crowd(&row.crowd_impact).to_string(),
-                price_impact: normalise_price(&row.price_impact).to_string(),
-                closure_impact: normalise_closure(&row.closure_impact).to_string(),
-                notes: row.notes.clone(),
-            });
+            city.holidays = holidays;
+        } else {
+            println!(
+                "warn: holidays_v2.csv references city_slug '{slug}' not found in Weather.csv"
+            );
         }
     }
+
+    // ── 5. Notes ──────────────────────────────────────────────────────────────
 
     for row in &note_rows {
         if row.city.trim().eq_ignore_ascii_case("general") {
@@ -231,6 +334,8 @@ fn build_cities(
 
     cities
 }
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 fn city_to_slug(city: &str) -> String {
     let base = match city.find('/') {
@@ -258,65 +363,32 @@ fn month_str_to_num(s: &str) -> i8 {
     }
 }
 
-fn parse_typical_period(period: &str) -> (u8, u8) {
-    const MONTHS: [(&str, u8); 12] = [
-        ("Jan", 1),
-        ("Feb", 2),
-        ("Mar", 3),
-        ("Apr", 4),
-        ("May", 5),
-        ("Jun", 6),
-        ("Jul", 7),
-        ("Aug", 8),
-        ("Sep", 9),
-        ("Oct", 10),
-        ("Nov", 11),
-        ("Dec", 12),
-    ];
-
-    let mut found: Vec<(usize, u8)> = MONTHS
-        .iter()
-        .filter_map(|(name, num)| period.find(name).map(|pos| (pos, *num)))
-        .collect();
-
-    found.sort_by_key(|(pos, _)| *pos);
-
-    match found.as_slice() {
-        [] => (0, 0),
-        [(_, m)] => (*m, *m),
-        [(_, m1), (_, m2), ..] => (*m1, *m2),
-    }
+/// Extracts the month number from an ISO 8601 date string ("YYYY-MM-DD").
+/// Returns 0 on malformed input; 0 is filtered by scoring logic.
+fn month_from_iso(date: &str) -> u8 {
+    date.split('-')
+        .nth(1)
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0)
 }
 
 fn normalise_crowd(s: &str) -> &str {
     match s.trim() {
-        "Extreme" => "extreme",
-        "Very High" => "very_high",
-        "High" => "high",
-        "Moderate" => "moderate",
-        "Low" => "low",
+        v @ ("extreme" | "very_high" | "high" | "moderate" | "low" | "none") => v,
         _ => "none",
     }
 }
 
 fn normalise_price(s: &str) -> &str {
-    let t = s.trim();
-    if t.starts_with("High") {
-        "high"
-    } else if t.starts_with("Moderate") {
-        "moderate"
-    } else {
-        "none"
+    match s.trim() {
+        v @ ("high" | "moderate" | "low" | "none") => v,
+        _ => "none",
     }
 }
 
 fn normalise_closure(s: &str) -> &str {
-    let t = s.trim();
-    if t.is_empty() || t == "None" {
-        "none"
-    } else if t.starts_with("Minimal") || t.starts_with("Government") {
-        "minimal"
-    } else {
-        "significant"
+    match s.trim() {
+        v @ ("significant" | "minimal" | "none") => v,
+        _ => "none",
     }
 }
