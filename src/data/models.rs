@@ -1,8 +1,12 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::RwLock;
+
+pub type ScoresCacheKey = (String, i32, Vec<i32>);
 
 pub struct AppData {
     pub cities: HashMap<String, CityData>,
+    pub scores_cache: RwLock<HashMap<ScoresCacheKey, Vec<MonthScore>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -13,6 +17,8 @@ pub struct CityData {
     pub arrivals: ArrivalsData,
     pub holidays: Vec<Holiday>,
     pub notes: Vec<Note>,
+    pub pricing: Vec<PricingEntry>,
+    pub monthly_scores: Vec<MonthScore>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,4 +86,23 @@ pub struct HolidayOccurrence {
 pub struct Note {
     pub category: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PricingEntry {
+    pub year: i32,
+    pub month: u8,
+    pub price_index: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthScore {
+    pub month: u8,
+    pub comfort: i32,
+    pub crowd_index: f64,
+    pub typhoon_penalty: f64,
+    pub holiday_penalty: i32,
+    pub price_index: Option<f64>,
+    pub price_penalty: Option<f64>,
+    pub overall: f64,
 }

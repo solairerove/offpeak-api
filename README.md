@@ -8,9 +8,9 @@ JSON API for the Offpeak travel planning tool. Reads city data from CSV files at
 
 ```
 GET /api/v1/cities
-GET /api/v1/cities/{slug}
+GET /api/v1/cities/{slug}?planning_year=2026&years=2018,2019,2024
 GET /api/v1/cities/{slug}/weather
-GET /api/v1/cities/{slug}/arrivals?year_from=2023&year_to=2024
+GET /api/v1/cities/{slug}/arrivals?planning_year=2026&years=2018,2019,2024
 ```
 
 ## Run locally

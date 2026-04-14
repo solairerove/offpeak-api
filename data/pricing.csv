@@ -1,0 +1,49 @@
+city,year,month,price_index,source,notes
+Hong Kong,2023,Jan,108.0,test,Pre-CNY shoulder
+Hong Kong,2023,Feb,150.0,test,CNY peak
+Hong Kong,2023,Mar,80.0,test,
+Hong Kong,2023,Apr,83.0,test,
+Hong Kong,2023,May,80.0,test,
+Hong Kong,2023,Jun,85.0,test,
+Hong Kong,2023,Jul,102.0,test,
+Hong Kong,2023,Aug,105.0,test,
+Hong Kong,2023,Sep,83.0,test,
+Hong Kong,2023,Oct,128.0,test,Golden Week
+Hong Kong,2023,Nov,74.0,test,
+Hong Kong,2023,Dec,122.0,test,Christmas/NYE
+Hong Kong,2024,Jan,112.0,test,Pre-CNY shoulder
+Hong Kong,2024,Feb,125.0,test,CNY peak
+Hong Kong,2024,Mar,82.0,test,
+Hong Kong,2024,Apr,86.0,test,
+Hong Kong,2024,May,82.0,test,
+Hong Kong,2024,Jun,88.0,test,
+Hong Kong,2024,Jul,105.0,test,
+Hong Kong,2024,Aug,108.0,test,
+Hong Kong,2024,Sep,85.0,test,
+Hong Kong,2024,Oct,132.0,test,Golden Week
+Hong Kong,2024,Nov,76.0,test,
+Hong Kong,2024,Dec,119.0,test,Christmas/NYE
+Da Nang,2023,Jan,102.0,test,Good weather shoulder
+Da Nang,2023,Feb,110.0,test,Tet proximity
+Da Nang,2023,Mar,95.0,test,
+Da Nang,2023,Apr,100.0,test,
+Da Nang,2023,May,105.0,test,
+Da Nang,2023,Jun,128.0,test,Domestic summer peak
+Da Nang,2023,Jul,135.0,test,Domestic summer peak
+Da Nang,2023,Aug,125.0,test,Domestic summer peak
+Da Nang,2023,Sep,62.0,test,Typhoon season low
+Da Nang,2023,Oct,58.0,test,Typhoon season low
+Da Nang,2023,Nov,70.0,test,
+Da Nang,2023,Dec,108.0,test,Western visitor season
+Da Nang,2024,Jan,105.0,test,Good weather shoulder
+Da Nang,2024,Feb,115.0,test,Tet proximity
+Da Nang,2024,Mar,97.0,test,
+Da Nang,2024,Apr,102.0,test,
+Da Nang,2024,May,108.0,test,
+Da Nang,2024,Jun,122.0,test,Domestic summer peak
+Da Nang,2024,Jul,130.0,test,Domestic summer peak
+Da Nang,2024,Aug,128.0,test,Domestic summer peak
+Da Nang,2024,Sep,60.0,test,Typhoon season low
+Da Nang,2024,Oct,55.0,test,Typhoon season low
+Da Nang,2024,Nov,68.0,test,
+Da Nang,2024,Dec,110.0,test,Western visitor season
