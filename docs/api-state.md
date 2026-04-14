@@ -1,12 +1,12 @@
 # STATE.md — offpeak-api handoff snapshot
 
-Generated: 2026-04-12
+Generated: 2026-04-14
 
 ---
 
 ## 1. Overview
 
-`offpeak-api` is a read-only JSON REST API that serves travel-planning data (weather, tourist arrivals, holidays, and notes) for a small, fixed set of cities. It is written in Rust (edition 2024) using Axum 0.8 / Tokio 1. There is no database; all data is loaded once at startup from four CSV files into an in-memory `HashMap<String, CityData>` wrapped in `Arc`. Dependencies: `axum`, `tokio` (full), `serde`/`serde_json`, `csv`, `tower-http` (cors), `tower`. Deployed on Railway via a multi-stage Alpine Docker build.
+`offpeak-api` is a read-only JSON REST API that serves travel-planning data (weather, tourist arrivals, holidays, pricing, and notes) for a small, fixed set of cities. It is written in Rust (edition 2024) using Axum 0.8 / Tokio 1. There is no database; all data is loaded once at startup from **six CSV files** into an in-memory `HashMap<String, CityData>` wrapped in `Arc`. `AppData` also holds a `RwLock`-guarded scores cache. Dependencies: `axum`, `tokio` (full), `serde`/`serde_json`, `csv`, `tower-http` (cors), `tower`. Deployed on Railway via a multi-stage Alpine Docker build.
 
 ---
 
@@ -36,7 +36,7 @@ cargo clippy --all-targets
 | Variable   | Default  | Description                            |
 |------------|----------|----------------------------------------|
 | `PORT`     | `3000`   | TCP port to listen on                  |
-| `DATA_DIR` | `"data"` | Directory containing the four CSV files|
+| `DATA_DIR` | `"data"` | Directory containing the six CSV files |
 
 The server panics on startup if any CSV file is missing/unparseable, or if the port cannot be bound.
 
@@ -49,11 +49,14 @@ Railway injects `PORT` automatically; `DATA_DIR` is not set in `railway.toml`, s
 All structs are in `src/data/models.rs`.
 
 ```rust
+pub type ScoresCacheKey = (String, i32, Vec<i32>);
+
 pub struct AppData {
     pub cities: HashMap<String, CityData>,
+    pub scores_cache: RwLock<HashMap<ScoresCacheKey, Vec<MonthScore>>>,
 }
 ```
-Top-level container. Key is city slug. Not serialized directly; only its contents are served.
+Top-level container. Key is city slug. `scores_cache` is an in-process cache keyed by `(slug, planning_year, years)`. Read path uses `RwLock::read()`; write path uses `RwLock::write()` on cache miss.
 
 ---
 
@@ -66,9 +69,11 @@ pub struct CityData {
     pub arrivals: ArrivalsData,
     pub holidays: Vec<Holiday>,
     pub notes: Vec<Note>,
+    pub pricing: Vec<PricingEntry>,
+    pub monthly_scores: Vec<MonthScore>,
 }
 ```
-One entry per city. `city` is the display name from the CSV. `slug` is derived (see §7). Aggregates all four CSV sources.
+One entry per city. `monthly_scores` is precomputed at load time for the default (all years, current year) combination. The handler overwrites `monthly_scores` in the JSON response with a freshly computed (or cached) value for the requested `planning_year`/`years` combination.
 
 ---
 
@@ -86,7 +91,7 @@ pub struct WeatherMonth {
     pub notes: String,
 }
 ```
-One row per month from `Weather.csv`. Twelve entries per city.
+One row per month from `weather.csv`. Twelve entries per city.
 
 ---
 
@@ -98,7 +103,6 @@ pub struct ArrivalsData {
     pub monthly_index: Vec<MonthlyIndex>,  // computed; see §6
 }
 ```
-Aggregated from `Arrivals.csv`. `monthly_index` is computed at load time (not in the CSV).
 
 ---
 
@@ -110,7 +114,6 @@ pub struct ArrivalEntry {
     pub visitors_thousands: i32,
 }
 ```
-One row per city/year/month from `Arrivals.csv`. Column header is "Visitors (thousands)" but only column index 3 is used.
 
 ---
 
@@ -121,23 +124,36 @@ pub struct MonthlyIndex {
     pub normalized: f64,  // 1.0–10.0, rounded to 1 decimal place
 }
 ```
-Computed field; see §6.
 
 ---
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 pub struct Holiday {
+    pub id: String,          // stable identifier from holidays.csv, e.g. "hk-cny"
     pub name: String,
-    pub typical_month_start: u8,   // 0 if unparseable
-    pub typical_month_end: u8,     // same as start for single-month events
-    pub crowd_impact: String,      // "extreme","very_high","high","moderate","low","none"
-    pub price_impact: String,      // "high","moderate","none"
-    pub closure_impact: String,    // "significant","minimal","none"
+    pub crowd_impact: String,   // "extreme","very_high","high","moderate","low","none"
+    pub price_impact: String,   // "high","moderate","low","none"
+    pub closure_impact: String, // "significant","minimal","none"
     pub notes: String,
+    pub occurrences: Vec<HolidayOccurrence>,
 }
 ```
-From `Holidays.csv`. Impact strings are normalized; see §7 for normalization rules.
+Loaded by joining `holidays.csv` (reference table) with `occurrences.csv` (dated events). Impact strings are normalised at load time (see §7).
+
+---
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct HolidayOccurrence {
+    pub year: i32,
+    pub date_start: String,  // ISO 8601: "YYYY-MM-DD"
+    pub date_end: String,    // ISO 8601: "YYYY-MM-DD". May be year+1 for Dec→Jan events.
+    pub month_start: u8,     // derived from date_start at load time
+    pub month_end: u8,       // derived from date_end at load time
+}
+```
+Multiple occurrences per year are valid — lunisolar events (e.g. Galungan on Bali's 210-day Pawukon cycle) can fall twice in a Gregorian year. Sorted by `(year, date_start)` at load time.
 
 ---
 
@@ -148,13 +164,44 @@ pub struct Note {
     pub text: String,
 }
 ```
-From `Notes.csv`. "General" city rows are appended to every city's notes list.
+From `notes.csv`. "General" city rows are appended to every city's notes list.
+
+---
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct PricingEntry {
+    pub year: i32,
+    pub month: u8,
+    pub price_index: f64,
+}
+```
+From `pricing.csv`. Rows with an unparseable `price_index` are skipped with a `warn:` log; all other parse errors are fatal.
+
+---
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthScore {
+    pub month: u8,
+    pub comfort: i32,              // 2–10; sum of heat_score (1–5) + rain_score (1–5)
+    pub crowd_index: f64,          // 1.0–10.0 from monthly_index; falls back to 5.0 if no data
+    pub typhoon_penalty: f64,      // 0.0/0.5/2.0/6.0
+    pub holiday_penalty: i32,      // 0–3; worst active holiday for planning_year
+    pub price_index: Option<f64>,  // None if no pricing data
+    pub price_penalty: Option<f64>,// None if no pricing data
+    pub overall: f64,              // 1.0–10.0, rounded to 1 decimal
+}
+```
+Computed by `scoring::compute_monthly_scores`. See §6 for formulas.
 
 ---
 
 ## 4. CSV schema
 
-### Weather.csv
+All files are in `DATA_DIR`. **File names are lowercase.**
+
+### weather.csv
 
 Columns (0-indexed, parsed by position):
 
@@ -171,66 +218,65 @@ Columns (0-indexed, parsed by position):
 | 8     | Typhoon Risk   | String   | Stored lowercased                  |
 | 9     | Notes          | String   | Free text                          |
 
-Example row:
-```
-Da Nang,Jan,25,19,84,96,18,25,None,"Cool, dry-ish. Best months start"
-```
-
-### Arrivals.csv
+### arrivals.csv
 
 Columns:
 
-| Index | Header               | Type   | Notes                                   |
-|-------|----------------------|--------|-----------------------------------------|
-| 0     | City                 | String |                                         |
-| 1     | Year                 | i32    |                                         |
-| 2     | Month                | String | "Jan"–"Dec"                             |
-| 3     | Visitors (thousands) | i32    | Column header includes "(thousands)"; only index 3 is read |
-| 4     | Notes                | String | Present in CSV but NOT parsed/stored    |
+| Index | Header               | Type   | Notes                                         |
+|-------|----------------------|--------|-----------------------------------------------|
+| 0     | City                 | String |                                               |
+| 1     | Year                 | i32    |                                               |
+| 2     | Month                | String | "Jan"–"Dec"                                   |
+| 3     | Visitors (thousands) | i32    |                                               |
+| 4     | Notes                | String | Present in CSV but **NOT parsed/stored**      |
 
-Example row:
-```
-Hong Kong,2018,Jan,5100,
-```
+Column 4 (inline notes) is silently ignored.
 
-Quirk: column 4 (inline notes) exists in the CSV but is silently ignored by the parser. The `ArrivalRow` struct has no `notes` field.
+### holidays.csv
 
-### Holidays.csv
+Reference table — one row per holiday event type.
 
-Columns:
+| Index | Header          | Type   | Notes                                        |
+|-------|-----------------|--------|----------------------------------------------|
+| 0     | id              | String | Stable identifier; foreign key from occurrences.csv |
+| 1     | city_slug       | String | City slug, e.g. `hong-kong`                  |
+| 2     | name            | String | Display name                                 |
+| 3     | crowd_impact    | String | Normalised to enum string                    |
+| 4     | price_impact    | String | Normalised to enum string                    |
+| 5     | closure_impact  | String | Normalised to enum string                    |
+| 6     | notes           | String | Free text                                    |
 
-| Index | Header            | Type   | Notes                                         |
-|-------|-------------------|--------|-----------------------------------------------|
-| 0     | Country/City      | String | May contain "/" — slug derived from after "/"  |
-| 1     | Holiday           | String | Stored as `name`                              |
-| 2     | Typical Period    | String | Free text; parsed for month names             |
-| 3     | Duration          | String | Present in CSV but **skipped** (index 4 used for Crowds) |
-| 4     | Impact: Crowds    | String | Normalized to enum string                     |
-| 5     | Impact: Prices    | String | Normalized to enum string                     |
-| 6     | Impact: Closures  | String | Normalized to enum string                     |
-| 7     | Notes             | String |                                               |
+### occurrences.csv
 
-Example row:
-```
-Hong Kong,Chinese New Year,Late Jan - Mid Feb,3-7 days,Extreme,High (+50-100%),Many shops closed 1-3 days,Worst time for budget travel. Great for atmosphere.
-```
+Dated occurrences — joined onto `holidays.csv` at load time.
 
-Quirk: Column 3 ("Duration") is **silently skipped**. The parser reads `r[4]` for crowd impact, jumping over index 3. Duration is not stored anywhere.
+| Index | Header      | Type   | Notes                                          |
+|-------|-------------|--------|------------------------------------------------|
+| 0     | holiday_id  | String | Foreign key into `holidays.csv` id column      |
+| 1     | year        | i32    |                                                |
+| 2     | date_start  | String | ISO 8601 "YYYY-MM-DD"; `month_start` derived   |
+| 3     | date_end    | String | ISO 8601 "YYYY-MM-DD"; `month_end` derived     |
 
-### Notes.csv
+Multiple rows with the same `(holiday_id, year)` are valid.
 
-Columns:
+Validation: unknown `holiday_id` values (no matching `holidays.csv` row) print a `warn:` log at startup. Holiday refs with zero occurrences also print a `warn:`. Neither is fatal.
+
+### pricing.csv
+
+| Index | Header      | Type   | Notes                                          |
+|-------|-------------|--------|------------------------------------------------|
+| 0     | City        | String | Display name; slug derived                     |
+| 1     | Year        | i32    |                                                |
+| 2     | Month       | String | "Jan"–"Dec"                                    |
+| 3     | price_index | f64    | Unparseable values skipped with `warn:` log    |
+
+### notes.csv
 
 | Index | Header       | Type   | Notes                                                     |
 |-------|--------------|--------|-----------------------------------------------------------|
 | 0     | City/General | String | "General" rows are broadcast to all cities                |
-| 1     | Category     | String | Stored lowercased; uses `.parse()` (infallible for String)|
+| 1     | Category     | String | Stored lowercased                                         |
 | 2     | Note         | String | Free text                                                 |
-
-Example row:
-```
-Hong Kong,Transport,"Buy Octopus card at airport immediately. Works on MTR, buses, ferries, convenience stores."
-```
 
 ---
 
@@ -238,75 +284,84 @@ Hong Kong,Transport,"Buy Octopus card at airport immediately. Works on MTR, buse
 
 Base path: `/api/v1`
 
-CORS: `Allow-Origin: *`, `Allow-Methods: *`, `Allow-Headers: *` (all requests accepted from any origin).
+CORS: `Allow-Origin: *`, `Allow-Methods: *`, `Allow-Headers: *`.
 
 ---
 
 ### `GET /api/v1/cities`
 
-Returns sorted list of all city slugs.
+Returns sorted list of all cities as `[{slug, name}]` objects.
 
 **Response:**
 ```json
-["da-nang", "hong-kong"]
+[
+  {"slug": "da-nang",   "name": "Da Nang"},
+  {"slug": "hong-kong", "name": "Hong Kong"}
+]
 ```
 
 **Errors:** none.
-
-Note: `list_cities` calls `.sort()` twice (bug — see §9).
 
 ---
 
 ### `GET /api/v1/cities/{slug}`
 
-Returns full `CityData` for a city.
+Returns full `CityData` for a city, with `monthly_scores` computed for the requested parameters.
 
-**Path params:** `slug` — city slug (e.g. `hong-kong`)
+**Path params:** `slug`
 
-**Response:**
+**Query params:**
+
+| Param          | Type            | Required | Description                                                                    |
+|----------------|-----------------|----------|--------------------------------------------------------------------------------|
+| `planning_year`| i32             | No       | Year used for holiday lookups. Defaults to current calendar year.              |
+| `years`        | comma-sep i32   | No       | Arrival years to use for crowd scoring. Empty = all years.                     |
+
+**Response:** Full `CityData` shape; `monthly_scores` is always present and reflects the query params:
+
 ```json
 {
   "city": "Hong Kong",
   "slug": "hong-kong",
-  "weather": [
-    {
-      "month": 1,
-      "avg_high_c": 18,
-      "avg_low_c": 14,
-      "humidity_pct": 74,
-      "rainfall_mm": 33,
-      "rain_days": 6,
-      "heat_index_c": 18,
-      "typhoon_risk": "none",
-      "notes": "Cool and dry. Good month"
-    }
-  ],
-  "arrivals": {
-    "years": [2018, 2019, 2023, 2024],
-    "data": [
-      { "year": 2018, "month": 1, "visitors_thousands": 5100 }
-    ],
-    "monthly_index": [
-      { "month": 1, "normalized": 7.2 }
-    ]
-  },
+  "weather": [...],
+  "arrivals": { "years": [...], "data": [...], "monthly_index": [...] },
   "holidays": [
     {
+      "id": "hk-cny",
       "name": "Chinese New Year",
-      "typical_month_start": 1,
-      "typical_month_end": 2,
       "crowd_impact": "extreme",
       "price_impact": "high",
       "closure_impact": "significant",
-      "notes": "Worst time for budget travel. Great for atmosphere."
+      "notes": "...",
+      "occurrences": [
+        {
+          "year": 2025,
+          "date_start": "2025-01-29",
+          "date_end": "2025-02-12",
+          "month_start": 1,
+          "month_end": 2
+        }
+      ]
     }
   ],
-  "notes": [
-    { "category": "transport", "text": "Buy Octopus card at airport immediately." },
-    { "category": "aviation", "text": "Razor blades (for safety/T-razors) prohibited in carry-on." }
+  "notes": [...],
+  "pricing": [...],
+  "monthly_scores": [
+    {
+      "month": 1,
+      "comfort": 9,
+      "crowd_index": 7.2,
+      "typhoon_penalty": 0.0,
+      "holiday_penalty": 3,
+      "price_index": 130.5,
+      "price_penalty": 3.5,
+      "overall": 5.8
+    }
   ]
 }
 ```
+
+**Caching:** scores are cached in `AppData.scores_cache` keyed by `(slug, planning_year, years)`. Cache is never evicted (process lifetime).
 
 **Errors:** `404` if slug not found.
 
@@ -314,11 +369,9 @@ Returns full `CityData` for a city.
 
 ### `GET /api/v1/cities/{slug}/weather`
 
-Returns the weather array only (same as `CityData.weather`).
+Returns the weather array only.
 
-**Path params:** `slug`
-
-**Response:** array of `WeatherMonth` objects (12 items). Same shape as `weather` field above.
+**Response:** array of 12 `WeatherMonth` objects.
 
 **Errors:** `404` if slug not found.
 
@@ -326,137 +379,180 @@ Returns the weather array only (same as `CityData.weather`).
 
 ### `GET /api/v1/cities/{slug}/arrivals`
 
-Returns arrivals data, optionally filtered by year range. When either query param is provided, `monthly_index` is recomputed over the filtered data.
-
-**Path params:** `slug`
+Returns arrivals data, optionally filtered by year list.
 
 **Query params:**
 
-| Param       | Type | Required | Description                                      |
-|-------------|------|----------|--------------------------------------------------|
-| `year_from` | i32  | No       | Inclusive lower bound. Defaults to earliest year.|
-| `year_to`   | i32  | No       | Inclusive upper bound. Defaults to latest year.  |
+| Param  | Type          | Required | Description                                               |
+|--------|---------------|----------|-----------------------------------------------------------|
+| `years`| comma-sep i32 | No       | Inclusive filter. `?years=2018,2024`. Empty = all years.  |
 
-If **neither** param is present, returns the precomputed `ArrivalsData` verbatim (no filtering, precomputed index).
+If `years` is absent or empty, returns the precomputed `ArrivalsData` verbatim. If provided, filters `data` and `years`, recomputes `monthly_index` from filtered data.
 
-If **either or both** params are present, filters `data` and `years`, recomputes `monthly_index` from filtered data.
+**Response:** `ArrivalsData` shape.
 
-**Response:** `ArrivalsData` shape (same as `arrivals` field in full city response).
-
-**Errors:** `404` if slug not found. Panics (unwrap) if `city.arrivals.years` is empty and a query param is provided (see §9).
+**Errors:** `404` if slug not found.
 
 ---
 
 ## 6. Derived metrics
 
-**`compute_monthly_index`** — `src/scoring.rs`
+All scoring logic is in `src/scoring.rs`.
 
-Input: `&[ArrivalEntry]`
-Output: `Vec<MonthlyIndex>` (one entry per month that has data; months with no entries are absent)
+### `compute_monthly_index(data: &[ArrivalEntry]) -> Vec<MonthlyIndex>`
 
-Algorithm (verbatim from code):
+Same algorithm as before: average arrivals per month across years, then min-max normalize to 1.0–10.0. Returns empty vec for empty input. Returns `[{month, normalized: 5.0}]` when all averages are equal (division-by-zero guard).
 
-```rust
-// Step 1: accumulate totals and counts per month (indices 1–12; index 0 unused)
-let mut totals = [0f64; 13];
-let mut counts = [0u32; 13];
+Formula: `normalized = 1.0 + 9.0 * (avg - min) / (max - min)`
 
-for entry in data {
-    let m = entry.month as usize;
-    if (1..=12).contains(&m) {
-        totals[m] += entry.visitors_thousands as f64;
-        counts[m] += 1;
-    }
-}
+### `compute_comfort_score(heat_index: i32, rain_days: i32) -> i32`
 
-// Step 2: compute per-month average across all years
-let averages: Vec<(u8, f64)> = (1u8..=12)
-    .filter(|&m| counts[m as usize] > 0)
-    .map(|m| (m, totals[m as usize] / counts[m as usize] as f64))
-    .collect();
+Returns sum of two independent 1–5 scores (range: 2–10).
 
-// Step 3: find global min and max of averages
-let min = averages.iter().map(|&(_, v)| v).fold(f64::MAX, f64::min);
-let max = averages.iter().map(|(_, v)| *v).fold(f64::MIN, f64::max);
+**Heat score:**
+| heat_index_c | score |
+|---|---|
+| ≤ 25 | 5 |
+| 26–28 | 4 |
+| 29–31 | 3 |
+| 32–34 | 2 |
+| ≥ 35 | 1 |
 
-// Step 4: normalize to 1.0–10.0; round to 1 decimal place
-averages.iter().map(|(month, avg)| {
-    let normalized = if (max - min).abs() < f64::EPSILON {
-        5.0   // all months equal → midpoint
-    } else {
-        1.0 + 9.0 * (avg - min) / (max - min)
-    };
-    MonthlyIndex {
-        month: *month,
-        normalized: (normalized * 10.0).round() / 10.0,
-    }
-})
+**Rain score:**
+| rain_days | score |
+|---|---|
+| ≤ 7 | 5 |
+| 8–12 | 4 |
+| 13–16 | 3 |
+| 17–20 | 2 |
+| ≥ 21 | 1 |
+
+### `compute_price_index(pricing: &[PricingEntry], month: u8, years: &[i32]) -> Option<f64>`
+
+Averages `price_index` across all entries matching `month` (and `years` if non-empty). Returns `None` if no matching entries.
+
+### `price_penalty(index: f64) -> f64`
+
+| price_index | penalty |
+|---|---|
+| ≤ 70 | 0.0 |
+| 71–90 | 1.0 |
+| 91–110 | 2.0 |
+| 111–130 | 3.5 |
+| 131–160 | 5.5 |
+| > 160 | 8.0 |
+
+### `typhoon_penalty(risk: &str) -> f64` (private)
+
+| risk | penalty |
+|---|---|
+| "none" | 0.0 |
+| "low" | 0.5 |
+| "moderate" | 2.0 |
+| "high" | 6.0 |
+| other | 0.0 |
+
+### `get_worst_holiday_penalty(holidays: &[Holiday], month: u8, year: i32) -> i32`
+
+Iterates all holidays, checks all occurrences where `occurrence.year == year`, checks if `month` falls within `[month_start, month_end]` (with Dec→Jan wrap support). Returns the worst penalty across active holidays:
+
+| crowd_impact | penalty |
+|---|---|
+| "extreme" | 3 |
+| "very_high" | 2 |
+| "high" | 2 |
+| "moderate" | 1 |
+| other | 0 |
+
+### `compute_overall_score(comfort, crowd, holiday_penalty, typhoon, pp) -> f64`
+
+Two formulas depending on whether pricing data exists:
+
+**With pricing (5 components):**
+```
+0.30 * comfort
++ 0.30 * (11.0 - crowd)
++ 0.15 * (10.0 - holiday_penalty)
++ 0.15 * (10.0 - typhoon_penalty)
++ 0.10 * (10.0 - price_penalty)
 ```
 
-Formula: `normalized = 1.0 + 9.0 * (avg - min) / (max - min)`, min-month = 1.0, max-month = 10.0.
+**Without pricing (4 components):**
+```
+0.35 * comfort
++ 0.35 * (11.0 - crowd)
++ 0.15 * (10.0 - holiday_penalty)
++ 0.15 * (10.0 - typhoon_penalty)
+```
 
-The function averages across years before normalizing, so a month with data across multiple years contributes a single average value, not one point per year.
+Result is clamped to [1.0, 10.0] and rounded to 1 decimal place.
+
+### `compute_monthly_scores(city, year, years) -> Vec<MonthScore>`
+
+Filters arrivals by `years`, calls `compute_monthly_index`, then for each month 1–12 assembles a `MonthScore` using all the functions above. Always returns exactly 12 entries.
 
 ---
 
 ## 7. Architecture decisions
 
-- **Decision: Arc<AppData> as Axum state.** Reason: single allocation at startup; all handler calls borrow a cheap Arc clone. No locks needed because data is read-only after load.
+- **Decision: Arc<AppData> as Axum state.** Reason: single allocation at startup; all handler calls borrow a cheap Arc clone.
 
-- **Decision: Panic on startup failure.** Reason: if CSVs are absent or malformed the service is useless; Railway will restart and the error surfaces in logs immediately.
+- **Decision: RwLock for scores cache inside AppData.** Reason: `Arc` alone is immutable; the cache requires interior mutability. Read-heavy access pattern makes `RwLock` appropriate over `Mutex`. Data fields in `AppData` are still effectively read-only post-startup.
 
-- **Decision: CSV parsed by column index, not header name.** Reason: the `csv` crate's `StringRecord` API is used; headers are checked (`has_headers(true)`) but not accessed by name. Brittle to column reordering.
+- **Decision: Panic on startup failure.** Reason: if CSVs are absent or malformed the service is useless; Railway will restart and the error surfaces in logs immediately. Exception: `pricing.csv` rows with unparseable `price_index` are silently skipped (logged as `warn:`); other malformed rows in any CSV are fatal.
 
-- **Decision: `city_to_slug` strips the part before "/" in the city name.** Reason: `Holidays.csv` uses `"Vietnam / Da Nang"` style; the slug is derived from the suffix after the last `/`, trimmed and lowercased with spaces replaced by `-`. Weather and Arrivals use plain city names with no `/`.
+- **Decision: CSV parsed by column index, not header name.** Reason: `StringRecord` API used throughout. Brittle to column reordering.
 
-- **Decision: Holidays column 3 (Duration) is silently skipped.** Reason: the parser jumps from `r[2]` (typical_period) directly to `r[4]` (crowd impact). No Duration field exists in the domain model.
+- **Decision: Holidays split into two CSV files.** `holidays.csv` is a reference table (one row per holiday type); `occurrences.csv` contains dated instances (one row per occurrence). Joined at load time. This supports lunisolar events that fall twice in a Gregorian year.
 
-- **Decision: General notes appended to every city.** Reason: `Notes.csv` rows with city "General" are collected separately and cloned onto each city's `notes` vec after city-specific notes. Order: city-specific first, then general.
+- **Decision: `city_to_slug` strips the part before "/" in the city name.** Reason: `holidays.csv` uses `"Vietnam / Da Nang"` style; slug is derived from the suffix after the last `/`, trimmed and lowercased with spaces replaced by `-`.
 
-- **Decision: `monthly_index` is precomputed at load time AND recomputed on filtered arrivals requests.** Reason: the stored value on `CityData` covers all years; the arrivals endpoint recomputes when year filtering is active. The two code paths produce identical results for the unfiltered case.
+- **Decision: General notes appended to every city.** `Notes.csv` rows with city "General" are cloned onto each city's `notes` vec after city-specific notes.
 
-- **Decision: No logging framework.** Only two `println!` calls in `main.rs` (city count and listen address). No tracing/log crate.
+- **Decision: `monthly_index` precomputed at load AND recomputed on filtered arrivals requests.** Same as before; two code paths produce identical results for the unfiltered case.
 
-- **Decision: CORS allows everything.** Reason: public read-only API; no credentials.
+- **Decision: `monthly_scores` cached per `(slug, planning_year, years)`.** Computed on first request for a given combination, stored in `AppData.scores_cache`. Never evicted within a process lifetime.
 
-- **Decision: `typhoon_risk` stored lowercased; impact fields normalized to snake_case strings.** Reason: consistent JSON output regardless of CSV casing variations. Done in `build_cities`, not in parsing functions.
+- **Decision: `current_year()` computed from `SystemTime` without a time library.** Uses `1970 + secs / 31_557_600` (Julian year). Off by hours/days near year boundaries but acceptable for planning purposes.
 
-- **Decision: `month_str_to_num` returns `0` for unrecognized strings.** Entries with month = 0 are silently ignored by `compute_monthly_index` (the `(1..=12).contains(&m)` guard).
+- **Decision: No logging framework.** Only `println!` in `main.rs` and `data/mod.rs`. No tracing/log crate.
+
+- **Decision: CORS allows everything.** Public read-only API; no credentials.
+
+- **Decision: Impact fields normalised at parse time.** Unknown values fall back to `"none"`. Done via `normalise_crowd`/`normalise_price`/`normalise_closure` helpers in `data/mod.rs`.
 
 ---
 
 ## 8. What is NOT implemented
 
-- **No search or filtering on cities** — only slug-exact lookup. There is no fuzzy search, no filtering by country/region, no pagination.
-- **No weather filtering** — `/weather` always returns all 12 months; no month or season filter.
-- **No holiday endpoint** — holidays are only returned as part of the full city response (`GET /cities/{slug}`). There is no `/cities/{slug}/holidays`.
-- **No notes endpoint** — same; notes only appear in the full city response.
-- **No health check endpoint** — Railway uses `GET /api/v1/cities` as the health check (returns 200 with data, not a lightweight ping). There is no `/health` or `/ping` route.
-- **Duration field from Holidays.csv** — present in the CSV, not stored or exposed anywhere.
-- **Inline notes from Arrivals.csv** — column 4 of Arrivals.csv contains per-row notes; silently ignored.
+- **No search or filtering on cities** — only slug-exact lookup.
+- **No weather filtering** — `/weather` always returns all 12 months.
+- **No holiday endpoint** — holidays only in full city response.
+- **No notes endpoint** — notes only in full city response.
+- **No health check endpoint** — Railway uses `GET /api/v1/cities` (returns 200 with data, not a lightweight ping).
+- **Duration field from old Holidays.csv** — the previous CSV had a Duration column; it was dropped in the schema redesign and is not stored anywhere.
+- **Inline notes from Arrivals.csv** — column 4 silently ignored.
 - **No authentication or rate limiting.**
-- **No city creation/update/delete** — entirely read-only; no write endpoints exist.
-- **Only two cities in the dataset** (Da Nang, Hong Kong). The code is generic but the data is minimal.
+- **No write endpoints** — entirely read-only.
+- **Scores cache has no TTL or eviction** — grows unboundedly with unique `(slug, year, years)` combinations.
 
 ---
 
 ## 9. Known issues and TODOs
 
-1. **Double sort in `list_cities`** (`src/api/handlers.rs:12`): `.sort()` is called twice in sequence — `slugs.sort()` then `(&mut *slugs).sort()`. The second call is a no-op but shows confusion about ownership/dereferencing. No functional impact.
+1. **`serde_json::to_value(...).unwrap()` in all handlers** — will panic if serialization fails. Serialization of these structs cannot actually fail (no custom serializers, no maps with non-string keys), but errors are not surfaced gracefully.
 
-2. **Panic on empty years vec with query params** (`src/api/handlers.rs:52-55`): if a city exists but has no arrival data (`city.arrivals.years` is empty), accessing `city.arrivals.years[0]` or `city.arrivals.years[city.arrivals.years.len() - 1]` will panic with an index-out-of-bounds. Currently safe because the data has arrivals for both cities, but fragile.
+2. **Comment noise in `scoring.rs`** — lines 15–23 contain inline teaching comments about Rust iterator semantics. Not harmful but add visual noise.
 
-3. **`serde_json::to_value(...).unwrap()` in all handlers** — will panic if serialization fails. Serialization of these structs cannot actually fail (no custom serializers, no maps with non-string keys), but using `unwrap()` means the error is not surfaced gracefully.
+3. **`cargo fmt` formatting issue** — `src/scoring.rs` line 21 has a missing space before the inline comment (reported by `cargo fmt --check`).
 
-4. **No tracing/structured logging** — stdout only; no request IDs, no latency logging, no error logging for 404s.
+4. **`month_str_to_num` returns `i8`; `WeatherMonth.month` stores it as `u8`** — the cast `month_str_to_num(...) as u8` wraps the `0` sentinel to `0u8`, which is consistent, but the `i8` return type is unnecessary.
 
-5. **CSV parsed by column index** — column reordering in any CSV silently produces wrong data with no error.
+5. **No tracing/structured logging** — stdout only; no request IDs, no latency logging, no error logging for 404s.
 
-6. **`month_str_to_num` returns `i8`; `WeatherMonth.month` stores it as `u8`** — the cast `month_str_to_num(&row.month) as u8` will wrap on the `0` sentinel value to `0u8`, which is consistent (0 is never a valid month), but the i8 return type is unnecessary.
+6. **CSV parsed by column index** — column reordering in any CSV silently produces wrong data with no error.
 
-7. **Comment noise in `scoring.rs`** — lines 15–22 and 29–36 contain extensive inline teaching comments about Rust iterator semantics and ownership. These are not harmful but add visual noise.
-
-8. **`cargo fmt` formatting issue** — `src/scoring.rs` line 21 has a missing space before the inline comment (reported by `cargo fmt --check`).
+7. **`current_year()` approximation** — uses Julian year seconds (`31_557_600`), not accounting for leap years precisely. Could return the wrong year for ~hours around Jan 1.
 
 ---
 
@@ -472,4 +568,12 @@ src/
 │   └── mod.rs
 ├── main.rs
 └── scoring.rs
+
+data/
+├── weather.csv
+├── arrivals.csv
+├── holidays.csv
+├── occurrences.csv
+├── pricing.csv
+└── notes.csv
 ```
