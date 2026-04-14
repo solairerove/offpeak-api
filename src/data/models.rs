@@ -13,6 +13,7 @@ pub struct CityData {
     pub arrivals: ArrivalsData,
     pub holidays: Vec<Holiday>,
     pub notes: Vec<Note>,
+    pub monthly_scores: Vec<MonthScore>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,4 +81,14 @@ pub struct HolidayOccurrence {
 pub struct Note {
     pub category: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthScore {
+    pub month: u8,
+    pub comfort: i32,
+    pub crowd_index: f64,
+    pub typhoon_penalty: f64,
+    pub holiday_penalty: i32,
+    pub overall: f64,
 }

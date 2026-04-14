@@ -1,26 +1,55 @@
 use crate::data::models::{AppData, ArrivalsData};
-use crate::scoring::compute_monthly_index;
+use crate::scoring::{compute_monthly_index, compute_monthly_scores};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use std::sync::Arc;
 
-pub async fn list_cities(State(data): State<Arc<AppData>>) -> Json<Vec<String>> {
-    let mut slugs: Vec<String> = data.cities.keys().cloned().collect();
-    slugs.sort();
-    (&mut *slugs).sort();
+#[derive(serde::Serialize)]
+pub struct CityListItem {
+    pub slug: String,
+    pub name: String,
+}
 
-    Json(slugs)
+pub async fn list_cities(State(data): State<Arc<AppData>>) -> Json<Vec<CityListItem>> {
+    let mut cities: Vec<CityListItem> = data.cities.values()
+        .map(|c| CityListItem { slug: c.slug.clone(), name: c.city.clone() })
+        .collect();
+    cities.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+    Json(cities)
+}
+
+fn current_year() -> i32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    1970 + (secs / 31_557_600) as i32
+}
+
+#[derive(Deserialize)]
+pub struct CityQuery {
+    pub year: Option<i32>,
+    pub year_from: Option<i32>,
+    pub year_to: Option<i32>,
 }
 
 pub async fn get_city(
     Path(slug): Path<String>,
+    Query(params): Query<CityQuery>,
     State(data): State<Arc<AppData>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let city = data.cities.get(&slug).ok_or(StatusCode::NOT_FOUND)?;
+    let year = params.year.unwrap_or_else(current_year);
+    let scores = compute_monthly_scores(city, year, params.year_from, params.year_to);
 
-    Ok(Json(serde_json::to_value(city).unwrap()))
+    let mut value = serde_json::to_value(city).unwrap();
+    value["monthly_scores"] = serde_json::to_value(scores).unwrap();
+
+    Ok(Json(value))
 }
 
 pub async fn get_city_weather(

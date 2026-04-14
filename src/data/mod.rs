@@ -265,6 +265,7 @@ fn build_cities(
             },
             holidays: vec![],
             notes: vec![],
+            monthly_scores: vec![],
         });
         entry.weather.push(WeatherMonth {
             month: month_str_to_num(&row.month) as u8,
