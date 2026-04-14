@@ -44,7 +44,17 @@ pub async fn get_city(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let city = data.cities.get(&slug).ok_or(StatusCode::NOT_FOUND)?;
     let year = params.year.unwrap_or_else(current_year);
-    let scores = compute_monthly_scores(city, year, params.year_from, params.year_to);
+    let key = (slug.clone(), year, params.year_from, params.year_to);
+
+    let cached = data.scores_cache.read().unwrap().get(&key).cloned();
+    let scores = match cached {
+        Some(s) => s,
+        None => {
+            let s = compute_monthly_scores(city, year, params.year_from, params.year_to);
+            data.scores_cache.write().unwrap().insert(key, s.clone());
+            s
+        }
+    };
 
     let mut value = serde_json::to_value(city).unwrap();
     value["monthly_scores"] = serde_json::to_value(scores).unwrap();

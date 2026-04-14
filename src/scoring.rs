@@ -80,15 +80,15 @@ fn typhoon_penalty(risk: &str) -> f64 {
 pub fn get_worst_holiday_penalty(holidays: &[Holiday], month: u8, year: i32) -> i32 {
     let mut worst = 0i32;
     for h in holidays {
-        let active = h.occurrences.iter().find(|o| o.year == year)
-            .map(|o| {
+        let active = h.occurrences.iter()
+            .filter(|o| o.year == year)
+            .any(|o| {
                 if o.month_start <= o.month_end {
                     month >= o.month_start && month <= o.month_end
                 } else {
                     month >= o.month_start || month <= o.month_end
                 }
-            })
-            .unwrap_or(false);
+            });
 
         if active {
             let p = match h.crowd_impact.as_str() {
@@ -160,7 +160,7 @@ pub fn compute_monthly_scores(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::models::{ArrivalEntry, Holiday, HolidayOccurrence};
+    use crate::data::models::{ArrivalEntry, ArrivalsData, CityData, Holiday, HolidayOccurrence, WeatherMonth};
 
     fn make_holiday(crowd_impact: &str, year: i32, month_start: u8, month_end: u8) -> Holiday {
         Holiday {
@@ -188,10 +188,235 @@ mod tests {
         }
     }
 
+    fn make_weather_month(month: u8, heat_index: i32, rain_days: i32, typhoon: &str) -> WeatherMonth {
+        WeatherMonth {
+            month,
+            avg_high_c: 25,
+            avg_low_c: 18,
+            humidity_pct: 70,
+            rainfall_mm: 100,
+            rain_days,
+            heat_index_c: heat_index,
+            typhoon_risk: typhoon.into(),
+            notes: String::new(),
+        }
+    }
+
+    // 12 neutral months: comfort=10, typhoon=none
+    fn neutral_weather() -> Vec<WeatherMonth> {
+        (1u8..=12).map(|m| make_weather_month(m, 25, 7, "none")).collect()
+    }
+
+    fn make_city(arrivals: Vec<ArrivalEntry>, holidays: Vec<Holiday>) -> CityData {
+        let mut years: Vec<i32> = arrivals.iter().map(|e| e.year).collect();
+        years.sort_unstable();
+        years.dedup();
+        CityData {
+            city: "Test City".into(),
+            slug: "test-city".into(),
+            weather: neutral_weather(),
+            arrivals: ArrivalsData { years, data: arrivals, monthly_index: vec![] },
+            holidays,
+            notes: vec![],
+            monthly_scores: vec![],
+        }
+    }
+
+    // ── comfort ───────────────────────────────────────────────────────────────
+
     #[test]
     fn comfort_extremes() {
         assert_eq!(compute_comfort_score(39, 15), 4); // heat=1, rain=3
         assert_eq!(compute_comfort_score(22, 3), 10); // heat=5, rain=5
+    }
+
+    #[test]
+    fn comfort_heat_bucket_boundaries() {
+        // each boundary: value at threshold stays in current bucket, +1 drops
+        assert_eq!(compute_comfort_score(25, 0), 10); // heat=5
+        assert_eq!(compute_comfort_score(26, 0), 9);  // heat=4
+        assert_eq!(compute_comfort_score(28, 0), 9);  // heat=4
+        assert_eq!(compute_comfort_score(29, 0), 8);  // heat=3
+        assert_eq!(compute_comfort_score(31, 0), 8);  // heat=3
+        assert_eq!(compute_comfort_score(32, 0), 7);  // heat=2
+        assert_eq!(compute_comfort_score(34, 0), 7);  // heat=2
+        assert_eq!(compute_comfort_score(35, 0), 6);  // heat=1
+    }
+
+    #[test]
+    fn comfort_rain_bucket_boundaries() {
+        assert_eq!(compute_comfort_score(0, 7),  10); // rain=5
+        assert_eq!(compute_comfort_score(0, 8),  9);  // rain=4
+        assert_eq!(compute_comfort_score(0, 12), 9);  // rain=4
+        assert_eq!(compute_comfort_score(0, 13), 8);  // rain=3
+        assert_eq!(compute_comfort_score(0, 16), 8);  // rain=3
+        assert_eq!(compute_comfort_score(0, 17), 7);  // rain=2
+        assert_eq!(compute_comfort_score(0, 20), 7);  // rain=2
+        assert_eq!(compute_comfort_score(0, 21), 6);  // rain=1
+    }
+
+    // ── overall ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn overall_score_known_values() {
+        // 0.35*8 + 0.35*(11-3) + 0.15*10 + 0.15*10 = 2.8+2.8+1.5+1.5 = 8.6
+        assert_eq!(compute_overall_score(8, 3.0, 0, "none"), 8.6);
+
+        // 0.35*6 + 0.35*(11-7) + 0.15*(10-2) + 0.15*(10-2) = 2.1+1.4+1.2+1.2 = 5.9
+        assert_eq!(compute_overall_score(6, 7.0, 2, "moderate"), 5.9);
+    }
+
+    #[test]
+    fn overall_score_best_case_is_10() {
+        // 0.35*10 + 0.35*10 + 0.15*10 + 0.15*10 = 10.0
+        assert_eq!(compute_overall_score(10, 1.0, 0, "none"), 10.0);
+    }
+
+    // ── holiday penalty ───────────────────────────────────────────────────────
+
+    #[test]
+    fn holiday_penalty_worst_wins_across_multiple() {
+        let holidays = vec![
+            make_holiday("moderate", 2025, 5, 5), // p=1
+            make_holiday("high",     2025, 5, 5), // p=2
+            make_holiday("extreme",  2025, 5, 5), // p=3
+        ];
+        assert_eq!(get_worst_holiday_penalty(&holidays, 5, 2025), 3);
+    }
+
+    #[test]
+    fn holiday_penalty_multi_month_span() {
+        // holiday spans Feb–Apr
+        let holidays = vec![make_holiday("very_high", 2025, 2, 4)];
+        assert_eq!(get_worst_holiday_penalty(&holidays, 1, 2025), 0);
+        assert_eq!(get_worst_holiday_penalty(&holidays, 2, 2025), 2);
+        assert_eq!(get_worst_holiday_penalty(&holidays, 3, 2025), 2);
+        assert_eq!(get_worst_holiday_penalty(&holidays, 4, 2025), 2);
+        assert_eq!(get_worst_holiday_penalty(&holidays, 5, 2025), 0);
+    }
+
+    #[test]
+    fn holiday_penalty_multi_occurrence_same_year() {
+        // Galungan-style: two occurrences in the same year (Mar and Sep)
+        let h = Holiday {
+            id: "galungan".into(),
+            name: "Galungan".into(),
+            crowd_impact: "extreme".into(),
+            price_impact: "none".into(),
+            closure_impact: "none".into(),
+            notes: String::new(),
+            occurrences: vec![
+                HolidayOccurrence { year: 2025, date_start: "2025-03-05".into(), date_end: "2025-03-05".into(), month_start: 3, month_end: 3 },
+                HolidayOccurrence { year: 2025, date_start: "2025-09-30".into(), date_end: "2025-09-30".into(), month_start: 9, month_end: 9 },
+            ],
+        };
+        // both months must be active — find() would miss the second occurrence
+        assert_eq!(get_worst_holiday_penalty(&[h.clone()], 3, 2025), 3);
+        assert_eq!(get_worst_holiday_penalty(&[h.clone()], 9, 2025), 3);
+        assert_eq!(get_worst_holiday_penalty(&[h],         6, 2025), 0);
+    }
+
+    // ── compute_monthly_scores ────────────────────────────────────────────────
+
+    #[test]
+    fn monthly_scores_returns_all_12_months() {
+        let city = make_city(vec![], vec![]);
+        let scores = compute_monthly_scores(&city, 2025, None, None);
+        assert_eq!(scores.len(), 12);
+        for month in 1u8..=12 {
+            assert!(scores.iter().any(|s| s.month == month), "missing month {month}");
+        }
+    }
+
+    #[test]
+    fn monthly_scores_no_arrivals_crowd_falls_back_to_midpoint() {
+        let city = make_city(vec![], vec![]);
+        let scores = compute_monthly_scores(&city, 2025, None, None);
+        assert!(scores.iter().all(|s| s.crowd_index == 5.0));
+    }
+
+    #[test]
+    fn monthly_scores_year_range_changes_crowd_index() {
+        // 2020: Jan is peak (1000), Jul is off-peak (100)
+        // 2023: Jul is peak (1000), Jan is off-peak (100)
+        let arrivals = vec![
+            entry(2020, 1, 1000), entry(2020, 7, 100),
+            entry(2023, 1, 100),  entry(2023, 7, 1000),
+        ];
+        let city = make_city(arrivals, vec![]);
+
+        let s2020 = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
+        let s2023 = compute_monthly_scores(&city, 2025, Some(2023), Some(2023));
+
+        let jan_2020 = s2020.iter().find(|s| s.month == 1).unwrap();
+        let jul_2020 = s2020.iter().find(|s| s.month == 7).unwrap();
+        let jan_2023 = s2023.iter().find(|s| s.month == 1).unwrap();
+        let jul_2023 = s2023.iter().find(|s| s.month == 7).unwrap();
+
+        // within same year-range Jan vs Jul
+        assert!(jan_2020.crowd_index > jul_2020.crowd_index);
+        assert!(jul_2023.crowd_index > jan_2023.crowd_index);
+        // Jan flips between ranges
+        assert!(jan_2020.crowd_index > jan_2023.crowd_index);
+        assert!(jul_2023.crowd_index > jul_2020.crowd_index);
+    }
+
+    #[test]
+    fn monthly_scores_planning_year_changes_holiday_penalty() {
+        // extreme holiday in March 2025 only
+        let holidays = vec![make_holiday("extreme", 2025, 3, 3)];
+        let city = make_city(vec![], holidays);
+
+        let s2025 = compute_monthly_scores(&city, 2025, None, None);
+        let s2026 = compute_monthly_scores(&city, 2026, None, None);
+
+        let march_2025 = s2025.iter().find(|s| s.month == 3).unwrap();
+        let march_2026 = s2026.iter().find(|s| s.month == 3).unwrap();
+
+        assert_eq!(march_2025.holiday_penalty, 3);
+        assert_eq!(march_2026.holiday_penalty, 0);
+        assert!(march_2025.overall < march_2026.overall);
+    }
+
+    #[test]
+    fn monthly_scores_year_range_outside_data_falls_back_to_midpoint() {
+        // data only has 2020, filter asks for 2030 → no data → crowd=5.0
+        let arrivals = vec![entry(2020, 1, 1000), entry(2020, 7, 100)];
+        let city = make_city(arrivals, vec![]);
+        let scores = compute_monthly_scores(&city, 2025, Some(2030), Some(2030));
+        assert!(scores.iter().all(|s| s.crowd_index == 5.0));
+    }
+
+    #[test]
+    fn overall_rounds_to_one_decimal() {
+        // 0.35*7 + 0.35*(11-4.5) + 0.15*10 + 0.15*10
+        // = 2.45 + 2.275 + 1.5 + 1.5 = 7.725 → rounds to 7.7
+        let score = compute_overall_score(7, 4.5, 0, "none");
+        assert_eq!(score, 7.7);
+        // verify it's not 7.725 or 7.72 or 7.73
+        assert_eq!((score * 10.0).fract(), 0.0);
+    }
+
+    #[test]
+    fn monthly_scores_year_range_and_planning_year_are_independent() {
+        // crowd filter (year_from/to) and planning year should not affect each other
+        let arrivals = vec![entry(2020, 1, 1000), entry(2023, 1, 100)];
+        let holidays = vec![make_holiday("extreme", 2025, 3, 3)];
+        let city = make_city(arrivals, holidays);
+
+        // same planning year, different crowd range → same holiday_penalty, different crowd
+        let a = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
+        let b = compute_monthly_scores(&city, 2025, Some(2023), Some(2023));
+        let march_a = a.iter().find(|s| s.month == 3).unwrap();
+        let march_b = b.iter().find(|s| s.month == 3).unwrap();
+        assert_eq!(march_a.holiday_penalty, march_b.holiday_penalty);
+
+        // same crowd range, different planning year → same crowd, different holiday_penalty
+        let c = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
+        let d = compute_monthly_scores(&city, 2026, Some(2020), Some(2020));
+        let jan_c = c.iter().find(|s| s.month == 1).unwrap();
+        let jan_d = d.iter().find(|s| s.month == 1).unwrap();
+        assert_eq!(jan_c.crowd_index, jan_d.crowd_index);
     }
 
     #[test]

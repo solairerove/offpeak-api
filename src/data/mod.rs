@@ -3,6 +3,7 @@ pub mod models;
 use models::*;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::RwLock;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -176,7 +177,7 @@ pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
         occurrence_rows,
         note_rows,
     );
-    Ok(AppData { cities })
+    Ok(AppData { cities, scores_cache: RwLock::new(HashMap::new()) })
 }
 
 // ── city assembly ─────────────────────────────────────────────────────────────

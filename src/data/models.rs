@@ -1,8 +1,12 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::RwLock;
+
+pub type ScoresCacheKey = (String, i32, Option<i32>, Option<i32>);
 
 pub struct AppData {
     pub cities: HashMap<String, CityData>,
+    pub scores_cache: RwLock<HashMap<ScoresCacheKey, Vec<MonthScore>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
