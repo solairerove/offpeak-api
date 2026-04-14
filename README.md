@@ -31,7 +31,3 @@ docker run -p 3000:3000 offpeak-api
 ## Deploy
 
 Deployed on Railway via `Dockerfile`. Set `PORT` automatically by Railway.
-
-## Hot Backlog
-
-- year range as multiselect rather than range
