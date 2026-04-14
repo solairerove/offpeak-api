@@ -122,14 +122,10 @@ pub fn compute_overall_score(
 pub fn compute_monthly_scores(
     city: &CityData,
     year: i32,
-    year_from: Option<i32>,
-    year_to: Option<i32>,
+    years: &[i32],
 ) -> Vec<MonthScore> {
     let filtered: Vec<_> = city.arrivals.data.iter()
-        .filter(|e| {
-            year_from.map_or(true, |f| e.year >= f) &&
-            year_to.map_or(true, |t| e.year <= t)
-        })
+        .filter(|e| years.is_empty() || years.contains(&e.year))
         .cloned()
         .collect();
 
@@ -321,7 +317,7 @@ mod tests {
     #[test]
     fn monthly_scores_returns_all_12_months() {
         let city = make_city(vec![], vec![]);
-        let scores = compute_monthly_scores(&city, 2025, None, None);
+        let scores = compute_monthly_scores(&city, 2025, &[]);
         assert_eq!(scores.len(), 12);
         for month in 1u8..=12 {
             assert!(scores.iter().any(|s| s.month == month), "missing month {month}");
@@ -331,7 +327,7 @@ mod tests {
     #[test]
     fn monthly_scores_no_arrivals_crowd_falls_back_to_midpoint() {
         let city = make_city(vec![], vec![]);
-        let scores = compute_monthly_scores(&city, 2025, None, None);
+        let scores = compute_monthly_scores(&city, 2025, &[]);
         assert!(scores.iter().all(|s| s.crowd_index == 5.0));
     }
 
@@ -345,8 +341,8 @@ mod tests {
         ];
         let city = make_city(arrivals, vec![]);
 
-        let s2020 = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
-        let s2023 = compute_monthly_scores(&city, 2025, Some(2023), Some(2023));
+        let s2020 = compute_monthly_scores(&city, 2025, &[2020]);
+        let s2023 = compute_monthly_scores(&city, 2025, &[2023]);
 
         let jan_2020 = s2020.iter().find(|s| s.month == 1).unwrap();
         let jul_2020 = s2020.iter().find(|s| s.month == 7).unwrap();
@@ -367,8 +363,8 @@ mod tests {
         let holidays = vec![make_holiday("extreme", 2025, 3, 3)];
         let city = make_city(vec![], holidays);
 
-        let s2025 = compute_monthly_scores(&city, 2025, None, None);
-        let s2026 = compute_monthly_scores(&city, 2026, None, None);
+        let s2025 = compute_monthly_scores(&city, 2025, &[]);
+        let s2026 = compute_monthly_scores(&city, 2026, &[]);
 
         let march_2025 = s2025.iter().find(|s| s.month == 3).unwrap();
         let march_2026 = s2026.iter().find(|s| s.month == 3).unwrap();
@@ -383,7 +379,7 @@ mod tests {
         // data only has 2020, filter asks for 2030 → no data → crowd=5.0
         let arrivals = vec![entry(2020, 1, 1000), entry(2020, 7, 100)];
         let city = make_city(arrivals, vec![]);
-        let scores = compute_monthly_scores(&city, 2025, Some(2030), Some(2030));
+        let scores = compute_monthly_scores(&city, 2025, &[2030]);
         assert!(scores.iter().all(|s| s.crowd_index == 5.0));
     }
 
@@ -405,15 +401,15 @@ mod tests {
         let city = make_city(arrivals, holidays);
 
         // same planning year, different crowd range → same holiday_penalty, different crowd
-        let a = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
-        let b = compute_monthly_scores(&city, 2025, Some(2023), Some(2023));
+        let a = compute_monthly_scores(&city, 2025, &[2020]);
+        let b = compute_monthly_scores(&city, 2025, &[2023]);
         let march_a = a.iter().find(|s| s.month == 3).unwrap();
         let march_b = b.iter().find(|s| s.month == 3).unwrap();
         assert_eq!(march_a.holiday_penalty, march_b.holiday_penalty);
 
         // same crowd range, different planning year → same crowd, different holiday_penalty
-        let c = compute_monthly_scores(&city, 2025, Some(2020), Some(2020));
-        let d = compute_monthly_scores(&city, 2026, Some(2020), Some(2020));
+        let c = compute_monthly_scores(&city, 2025, &[2020]);
+        let d = compute_monthly_scores(&city, 2026, &[2020]);
         let jan_c = c.iter().find(|s| s.month == 1).unwrap();
         let jan_d = d.iter().find(|s| s.month == 1).unwrap();
         assert_eq!(jan_c.crowd_index, jan_d.crowd_index);

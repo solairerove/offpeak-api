@@ -6,6 +6,18 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// Deserializes `years` from a comma-separated string or a single value.
+/// Use `?years=2018,2024,2025` or `?years=2026`.
+fn deserialize_years<'de, D>(deserializer: D) -> Result<Vec<i32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.split(',')
+        .map(|v| v.trim().parse::<i32>().map_err(serde::de::Error::custom))
+        .collect()
+}
+
 #[derive(serde::Serialize)]
 pub struct CityListItem {
     pub slug: String,
@@ -32,9 +44,9 @@ fn current_year() -> i32 {
 
 #[derive(Deserialize)]
 pub struct CityQuery {
-    pub year: Option<i32>,
-    pub year_from: Option<i32>,
-    pub year_to: Option<i32>,
+    pub planning_year: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_years")]
+    pub years: Vec<i32>,
 }
 
 pub async fn get_city(
@@ -43,14 +55,17 @@ pub async fn get_city(
     State(data): State<Arc<AppData>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let city = data.cities.get(&slug).ok_or(StatusCode::NOT_FOUND)?;
-    let year = params.year.unwrap_or_else(current_year);
-    let key = (slug.clone(), year, params.year_from, params.year_to);
+    let year = params.planning_year.unwrap_or_else(current_year);
+    let mut selected_years = params.years;
+    selected_years.sort_unstable();
+    selected_years.dedup();
+    let key = (slug.clone(), year, selected_years.clone());
 
     let cached = data.scores_cache.read().unwrap().get(&key).cloned();
     let scores = match cached {
         Some(s) => s,
         None => {
-            let s = compute_monthly_scores(city, year, params.year_from, params.year_to);
+            let s = compute_monthly_scores(city, year, &selected_years);
             data.scores_cache.write().unwrap().insert(key, s.clone());
             s
         }
@@ -73,8 +88,8 @@ pub async fn get_city_weather(
 
 #[derive(Deserialize)]
 pub struct ArrivalsQuery {
-    pub year_from: Option<i32>,
-    pub year_to: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_years")]
+    pub years: Vec<i32>,
 }
 
 pub async fn get_city_arrivals(
@@ -84,20 +99,19 @@ pub async fn get_city_arrivals(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let city = data.cities.get(&slug).ok_or(StatusCode::NOT_FOUND)?;
 
-    if params.year_from.is_none() && params.year_to.is_none() {
+    if params.years.is_empty() {
         return Ok(Json(serde_json::to_value(&city.arrivals).unwrap()));
     }
 
-    let year_from = params.year_from.unwrap_or(city.arrivals.years[0]);
-    let year_to = params
-        .year_to
-        .unwrap_or(city.arrivals.years[city.arrivals.years.len() - 1]);
+    let mut selected_years = params.years;
+    selected_years.sort_unstable();
+    selected_years.dedup();
 
     let filtered_data: Vec<_> = city
         .arrivals
         .data
         .iter()
-        .filter(|e| e.year >= year_from && e.year <= year_to)
+        .filter(|e| selected_years.contains(&e.year))
         .cloned()
         .collect();
 
@@ -106,7 +120,7 @@ pub async fn get_city_arrivals(
         .years
         .iter()
         .copied()
-        .filter(|&y| y >= year_from && y <= year_to)
+        .filter(|y| selected_years.contains(y))
         .collect();
     years.sort_unstable();
 

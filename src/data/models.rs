@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-pub type ScoresCacheKey = (String, i32, Option<i32>, Option<i32>);
+pub type ScoresCacheKey = (String, i32, Vec<i32>);
 
 pub struct AppData {
     pub cities: HashMap<String, CityData>,
