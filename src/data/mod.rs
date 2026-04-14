@@ -164,10 +164,10 @@ fn parse_notes(path: &Path) -> Result<Vec<NoteRow>> {
 // ── public entry point ────────────────────────────────────────────────────────
 
 pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
-    let weather_rows = parse_weather(&data_dir.join("Weather.csv"))?;
-    let arrival_rows = parse_arrivals(&data_dir.join("Arrivals.csv"))?;
-    let note_rows = parse_notes(&data_dir.join("Notes.csv"))?;
-    let holiday_refs = parse_holidays(&data_dir.join("holidays_v2.csv"))?;
+    let weather_rows = parse_weather(&data_dir.join("weather.csv"))?;
+    let arrival_rows = parse_arrivals(&data_dir.join("arrivals.csv"))?;
+    let note_rows = parse_notes(&data_dir.join("notes.csv"))?;
+    let holiday_refs = parse_holidays(&data_dir.join("holidays.csv"))?;
     let occurrence_rows = parse_occurrences(&data_dir.join("occurrences.csv"))?;
 
     let cities = build_cities(
