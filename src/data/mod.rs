@@ -55,6 +55,13 @@ struct NoteRow {
     note: String,
 }
 
+struct PricingRow {
+    city: String,
+    year: i32,
+    month: u8,
+    price_index: f64,
+}
+
 // ── CSV parsers ───────────────────────────────────────────────────────────────
 
 fn parse_weather(path: &Path) -> Result<Vec<WeatherRow>> {
@@ -145,6 +152,30 @@ fn parse_occurrences(path: &Path) -> Result<Vec<OccurrenceRow>> {
     Ok(rows)
 }
 
+fn parse_pricing(path: &Path) -> Result<Vec<PricingRow>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let r = result?;
+        let price_index = match r[3].parse::<f64>() {
+            Ok(v) => v,
+            Err(_) => {
+                println!("warn: skipping pricing row with unparseable price_index '{}'", &r[3]);
+                continue;
+            }
+        };
+        rows.push(PricingRow {
+            city: r[0].to_string(),
+            year: r[1].parse()?,
+            month: month_str_to_num(&r[2]) as u8,
+            price_index,
+        });
+    }
+    Ok(rows)
+}
+
 fn parse_notes(path: &Path) -> Result<Vec<NoteRow>> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
@@ -169,6 +200,7 @@ pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
     let note_rows = parse_notes(&data_dir.join("notes.csv"))?;
     let holiday_refs = parse_holidays(&data_dir.join("holidays.csv"))?;
     let occurrence_rows = parse_occurrences(&data_dir.join("occurrences.csv"))?;
+    let pricing_rows = parse_pricing(&data_dir.join("pricing.csv"))?;
 
     let cities = build_cities(
         weather_rows,
@@ -176,6 +208,7 @@ pub fn load_app_data(data_dir: &Path) -> Result<AppData> {
         holiday_refs,
         occurrence_rows,
         note_rows,
+        pricing_rows,
     );
     Ok(AppData { cities, scores_cache: RwLock::new(HashMap::new()) })
 }
@@ -188,6 +221,7 @@ fn build_cities(
     holiday_refs: HashMap<String, HolidayRef>,
     occurrence_rows: Vec<OccurrenceRow>,
     note_rows: Vec<NoteRow>,
+    pricing_rows: Vec<PricingRow>,
 ) -> HashMap<String, CityData> {
     let mut cities: HashMap<String, CityData> = HashMap::new();
 
@@ -266,6 +300,7 @@ fn build_cities(
             },
             holidays: vec![],
             notes: vec![],
+            pricing: vec![],
             monthly_scores: vec![],
         });
         entry.weather.push(WeatherMonth {
@@ -332,6 +367,21 @@ fn build_cities(
 
     for city in cities.values_mut() {
         city.notes.extend(general_notes.clone());
+    }
+
+    // ── 6. Pricing ────────────────────────────────────────────────────────────
+
+    for row in pricing_rows {
+        let slug = city_to_slug(&row.city);
+        if let Some(city) = cities.get_mut(&slug) {
+            city.pricing.push(crate::data::models::PricingEntry {
+                year: row.year,
+                month: row.month,
+                price_index: row.price_index,
+            });
+        } else {
+            println!("warn: pricing.csv references city '{}' not found in weather.csv", row.city);
+        }
     }
 
     cities

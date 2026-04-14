@@ -276,6 +276,56 @@ fn overall_high_price_depresses_score() {
 
 ## Frontend changes (offpeak-web)
 
+### Sample API response
+
+`GET /api/v1/cities/hong-kong` now returns `monthly_scores` with two new nullable fields. Cities without pricing data return `null` for both; cities with data return computed values.
+
+```json
+{
+  "city": "Hong Kong",
+  "slug": "hong-kong",
+  "pricing": [...],
+  "monthly_scores": [
+    {
+      "month": 1,
+      "comfort": 8,
+      "crowd_index": 6.2,
+      "typhoon_penalty": 0.0,
+      "holiday_penalty": 0,
+      "price_index": 110.0,
+      "price_penalty": 2.0,
+      "overall": 7.4
+    },
+    {
+      "month": 2,
+      "comfort": 8,
+      "crowd_index": 7.1,
+      "typhoon_penalty": 0.0,
+      "holiday_penalty": 3,
+      "price_index": 157.5,
+      "price_penalty": 5.5,
+      "overall": 5.8
+    }
+  ]
+}
+```
+
+The `pricing` array (raw per-year entries) is present in the response but is not needed by the frontend — use `monthly_scores[].price_index` instead, which is already averaged across years.
+
+### Realistic value range for price_index
+
+Based on current data (HK + Da Nang, 2023–2024):
+
+| Range    | Typical months                        |
+|----------|---------------------------------------|
+| 55–70    | Da Nang typhoon season (Sep–Oct)      |
+| 70–90    | Off-season shoulder months            |
+| 90–115   | Average months — the majority         |
+| 115–135  | HK Golden Week / Christmas, Da Nang summer peak |
+| 135–160+ | HK CNY (Feb), Da Nang Jul peak        |
+
+For color scale calibration: treat 100 as neutral midpoint. Values below 80 are clearly cheap (green end), values above 130 are clearly expensive (red end).
+
 ### src/types.ts
 
 Update `MonthScore`:
@@ -341,16 +391,16 @@ Partial-year data (e.g. only 9 months available) should not be used to compute a
 
 ## Migration checklist
 
-- [ ] Create `data/pricing.csv` — enter HK and Da Nang data
-- [ ] Add `PricingEntry` struct to `models.rs`
-- [ ] Add `pricing: Vec<PricingEntry>` to `CityData`
-- [ ] Write `load_pricing` loader in `data/mod.rs`
-- [ ] Add `compute_price_index` to `scoring.rs` with tests
-- [ ] Add `price_penalty` to `scoring.rs` with tests
-- [ ] Update `MonthScore` struct: add `price_index`, `price_penalty` as `Option<f64>`
-- [ ] Update `compute_overall_score`: new signature, two formula branches
-- [ ] Update `compute_monthly_scores` to compute and pass pricing through
-- [ ] Add all pricing-related tests
+- [x] Create `data/pricing.csv` — enter HK and Da Nang data
+- [x] Add `PricingEntry` struct to `models.rs`
+- [x] Add `pricing: Vec<PricingEntry>` to `CityData`
+- [x] Write `load_pricing` loader in `data/mod.rs`
+- [x] Add `compute_price_index` to `scoring.rs` with tests
+- [x] Add `price_penalty` to `scoring.rs` with tests
+- [x] Update `MonthScore` struct: add `price_index`, `price_penalty` as `Option<f64>`
+- [x] Update `compute_overall_score`: new signature, two formula branches
+- [x] Update `compute_monthly_scores` to compute and pass pricing through
+- [x] Add all pricing-related tests
 - [ ] Update `MonthScore` type in `types.ts`
 - [ ] Update `computeOverallFromComponents` in `scoring.ts`
 - [ ] Add conditional Price row to `Heatmap.tsx`

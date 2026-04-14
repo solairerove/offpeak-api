@@ -1,4 +1,4 @@
-use crate::data::models::{ArrivalEntry, CityData, Holiday, MonthScore, MonthlyIndex};
+use crate::data::models::{ArrivalEntry, CityData, Holiday, MonthScore, MonthlyIndex, PricingEntry};
 
 pub fn compute_monthly_index(data: &[ArrivalEntry]) -> Vec<MonthlyIndex> {
     let mut totals = [0f64; 13];
@@ -67,6 +67,28 @@ pub fn compute_comfort_score(heat_index: i32, rain_days: i32) -> i32 {
     heat + rain
 }
 
+pub fn compute_price_index(pricing: &[PricingEntry], month: u8, years: &[i32]) -> Option<f64> {
+    let values: Vec<f64> = pricing.iter()
+        .filter(|p| p.month == month && (years.is_empty() || years.contains(&p.year)))
+        .map(|p| p.price_index)
+        .collect();
+
+    if values.is_empty() {
+        return None;
+    }
+
+    Some(values.iter().sum::<f64>() / values.len() as f64)
+}
+
+pub fn price_penalty(index: f64) -> f64 {
+    if index <= 70.0       { 0.0 }
+    else if index <= 90.0  { 1.0 }
+    else if index <= 110.0 { 2.0 }
+    else if index <= 130.0 { 3.5 }
+    else if index <= 160.0 { 5.5 }
+    else                   { 8.0 }
+}
+
 fn typhoon_penalty(risk: &str) -> f64 {
     match risk {
         "none"     => 0.0,
@@ -109,14 +131,21 @@ pub fn compute_overall_score(
     crowd: f64,
     holiday_penalty: i32,
     typhoon: &str,
+    pp: Option<f64>,
 ) -> f64 {
     let tp = typhoon_penalty(typhoon);
-    let raw = 0.35 * comfort as f64
-            + 0.35 * (11.0 - crowd)
-            + 0.15 * (10.0 - holiday_penalty as f64)
-            + 0.15 * (10.0 - tp);
-    let clamped = raw.max(1.0).min(10.0);
-    (clamped * 10.0).round() / 10.0
+    let raw = match pp {
+        Some(pp) => 0.30 * comfort as f64
+                  + 0.30 * (11.0 - crowd)
+                  + 0.15 * (10.0 - holiday_penalty as f64)
+                  + 0.15 * (10.0 - tp)
+                  + 0.10 * (10.0 - pp),
+        None =>     0.35 * comfort as f64
+                  + 0.35 * (11.0 - crowd)
+                  + 0.15 * (10.0 - holiday_penalty as f64)
+                  + 0.15 * (10.0 - tp),
+    };
+    (raw.max(1.0).min(10.0) * 10.0).round() / 10.0
 }
 
 pub fn compute_monthly_scores(
@@ -140,7 +169,9 @@ pub fn compute_monthly_scores(
 
         let comfort = compute_comfort_score(weather.heat_index_c, weather.rain_days);
         let hp = get_worst_holiday_penalty(&city.holidays, month, year);
-        let overall = compute_overall_score(comfort, crowd, hp, &weather.typhoon_risk);
+        let pi = compute_price_index(&city.pricing, month, years);
+        let pp = pi.map(price_penalty);
+        let overall = compute_overall_score(comfort, crowd, hp, &weather.typhoon_risk, pp);
 
         MonthScore {
             month,
@@ -148,6 +179,8 @@ pub fn compute_monthly_scores(
             crowd_index: crowd,
             typhoon_penalty: typhoon_penalty(&weather.typhoon_risk),
             holiday_penalty: hp,
+            price_index: pi,
+            price_penalty: pp,
             overall,
         }
     }).collect()
@@ -156,7 +189,7 @@ pub fn compute_monthly_scores(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::models::{ArrivalEntry, ArrivalsData, CityData, Holiday, HolidayOccurrence, WeatherMonth};
+    use crate::data::models::{ArrivalEntry, ArrivalsData, CityData, Holiday, HolidayOccurrence, PricingEntry, WeatherMonth};
 
     fn make_holiday(crowd_impact: &str, year: i32, month_start: u8, month_end: u8) -> Holiday {
         Holiday {
@@ -214,6 +247,7 @@ mod tests {
             arrivals: ArrivalsData { years, data: arrivals, monthly_index: vec![] },
             holidays,
             notes: vec![],
+            pricing: vec![],
             monthly_scores: vec![],
         }
     }
@@ -256,16 +290,16 @@ mod tests {
     #[test]
     fn overall_score_known_values() {
         // 0.35*8 + 0.35*(11-3) + 0.15*10 + 0.15*10 = 2.8+2.8+1.5+1.5 = 8.6
-        assert_eq!(compute_overall_score(8, 3.0, 0, "none"), 8.6);
+        assert_eq!(compute_overall_score(8, 3.0, 0, "none", None), 8.6);
 
         // 0.35*6 + 0.35*(11-7) + 0.15*(10-2) + 0.15*(10-2) = 2.1+1.4+1.2+1.2 = 5.9
-        assert_eq!(compute_overall_score(6, 7.0, 2, "moderate"), 5.9);
+        assert_eq!(compute_overall_score(6, 7.0, 2, "moderate", None), 5.9);
     }
 
     #[test]
     fn overall_score_best_case_is_10() {
         // 0.35*10 + 0.35*10 + 0.15*10 + 0.15*10 = 10.0
-        assert_eq!(compute_overall_score(10, 1.0, 0, "none"), 10.0);
+        assert_eq!(compute_overall_score(10, 1.0, 0, "none", None), 10.0);
     }
 
     // ── holiday penalty ───────────────────────────────────────────────────────
@@ -387,7 +421,7 @@ mod tests {
     fn overall_rounds_to_one_decimal() {
         // 0.35*7 + 0.35*(11-4.5) + 0.15*10 + 0.15*10
         // = 2.45 + 2.275 + 1.5 + 1.5 = 7.725 → rounds to 7.7
-        let score = compute_overall_score(7, 4.5, 0, "none");
+        let score = compute_overall_score(7, 4.5, 0, "none", None);
         assert_eq!(score, 7.7);
         // verify it's not 7.725 or 7.72 or 7.73
         assert_eq!((score * 10.0).fract(), 0.0);
@@ -426,8 +460,8 @@ mod tests {
 
     #[test]
     fn overall_high_typhoon_depresses_score() {
-        let without = compute_overall_score(8, 3.0, 0, "none");
-        let with_high = compute_overall_score(8, 3.0, 0, "high");
+        let without = compute_overall_score(8, 3.0, 0, "none", None);
+        let with_high = compute_overall_score(8, 3.0, 0, "high", None);
         assert!(with_high < without);
         // 0.15 * (10 - 0) - 0.15 * (10 - 6) = 1.5 - 0.6 = 0.9
         assert!((without - with_high - 0.9).abs() < 0.05);
@@ -435,8 +469,8 @@ mod tests {
 
     #[test]
     fn overall_clamped_to_1_10() {
-        let low = compute_overall_score(2, 10.0, 3, "high");
-        let high = compute_overall_score(10, 1.0, 0, "none");
+        let low = compute_overall_score(2, 10.0, 3, "high", None);
+        let high = compute_overall_score(10, 1.0, 0, "none", None);
         assert!(low >= 1.0);
         assert!(high <= 10.0);
     }
@@ -461,6 +495,64 @@ mod tests {
     fn holiday_penalty_wrong_year_ignored() {
         let holidays = vec![make_holiday("extreme", 2024, 3, 3)];
         assert_eq!(get_worst_holiday_penalty(&holidays, 3, 2025), 0);
+    }
+
+    // ── pricing ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn price_penalty_thresholds() {
+        assert_eq!(price_penalty(65.0),  0.0);
+        assert_eq!(price_penalty(85.0),  1.0);
+        assert_eq!(price_penalty(100.0), 2.0);
+        assert_eq!(price_penalty(120.0), 3.5);
+        assert_eq!(price_penalty(145.0), 5.5);
+        assert_eq!(price_penalty(170.0), 8.0);
+    }
+
+    #[test]
+    fn price_index_averages_across_years() {
+        let entries = vec![
+            PricingEntry { year: 2023, month: 2, price_index: 160.0 },
+            PricingEntry { year: 2024, month: 2, price_index: 170.0 },
+        ];
+        let result = compute_price_index(&entries, 2, &[]).unwrap();
+        assert!((result - 165.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn price_index_filters_by_years() {
+        let entries = vec![
+            PricingEntry { year: 2023, month: 2, price_index: 160.0 },
+            PricingEntry { year: 2024, month: 2, price_index: 170.0 },
+        ];
+        let r2023 = compute_price_index(&entries, 2, &[2023]).unwrap();
+        let r2024 = compute_price_index(&entries, 2, &[2024]).unwrap();
+        assert!((r2023 - 160.0).abs() < 0.01);
+        assert!((r2024 - 170.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn price_index_returns_none_for_missing_month() {
+        let entries = vec![
+            PricingEntry { year: 2024, month: 3, price_index: 110.0 },
+        ];
+        assert!(compute_price_index(&entries, 2, &[]).is_none());
+    }
+
+    #[test]
+    fn overall_without_pricing_uses_four_component_formula() {
+        // 0.35*8 + 0.35*(11-3) + 0.15*10 + 0.15*10 = 2.8+2.8+1.5+1.5 = 8.6
+        let score = compute_overall_score(8, 3.0, 0, "none", None);
+        assert!((score - 8.6).abs() < 0.05);
+    }
+
+    #[test]
+    fn overall_high_price_depresses_score() {
+        let cheap     = compute_overall_score(7, 4.0, 0, "none", Some(0.0));
+        let expensive = compute_overall_score(7, 4.0, 0, "none", Some(8.0));
+        // 0.10 * (10-0) vs 0.10 * (10-8) → 0.8 difference
+        assert!(expensive < cheap);
+        assert!((cheap - expensive - 0.8).abs() < 0.05);
     }
 
     #[test]
