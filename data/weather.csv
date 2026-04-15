@@ -1,25 +1,25 @@
 City,Month,Avg High °C,Avg Low °C,Humidity %,Rainfall mm,Rain Days,Heat Index °C,Typhoon Risk,Notes
-Da Nang,Jan,25,19,84,96,18,25,None,"Cool, dry-ish. Best months start"
-Da Nang,Feb,26,20,84,33,11,26,None,Driest month. Sweet spot
-Da Nang,Mar,29,22,84,22,7,36,None,Warming up. Still good
-Da Nang,Apr,32,24,83,27,7,41,None,Getting hot. Beach season starts
-Da Nang,May,34,25,82,62,10,44,None,Hot. Humidity building
-Da Nang,Jun,34,26,80,87,9,44,Low,Peak heat. Still mostly dry
-Da Nang,Jul,34,26,79,86,9,44,Low,Hot. AC mode
-Da Nang,Aug,34,25,81,117,12,44,Moderate,Storms possible
-Da Nang,Sep,32,24,85,350,18,41,High,Rainy season peak. Typhoon risk
-Da Nang,Oct,29,23,86,613,21,36,High,Worst month. Flooding possible
-Da Nang,Nov,27,22,85,366,20,33,Moderate,Still very wet
-Da Nang,Dec,25,19,85,199,19,25,Low,"Cooling down, rain easing"
-Hong Kong,Jan,18,14,74,33,6,18,None,Cool and dry. Good month
-Hong Kong,Feb,18,14,80,46,9,18,None,CNY period. Foggy
-Hong Kong,Mar,21,17,82,74,11,21,None,Warming. Can be foggy/humid
-Hong Kong,Apr,25,21,83,162,12,25,None,"Warm, humid, rainy season starts"
-Hong Kong,May,29,25,83,305,16,36,Low,Hot and wet
-Hong Kong,Jun,31,27,82,456,19,39,Moderate,Typhoon season begins
-Hong Kong,Jul,32,27,81,377,17,41,Moderate,Peak heat. Typhoons
-Hong Kong,Aug,31,27,82,432,17,39,High,Hottest. Typhoon peak
-Hong Kong,Sep,31,26,79,328,15,39,High,"Still hot, typhoons"
-Hong Kong,Oct,28,23,73,100,8,33,Moderate,"Best month. Dry, comfortable"
-Hong Kong,Nov,24,19,70,37,6,24,None,Excellent. Cool and dry
-Hong Kong,Dec,20,15,69,27,5,20,None,"Cool, dry. Christmas crowds"
+Da Nang,Jan,24,19,84,191,5,24,None,"Cool, dry-ish. Best months start"
+Da Nang,Feb,26,20,84,110,4,26,None,Driest month. Sweet spot
+Da Nang,Mar,28,22,83,98,5,34,None,Warming up. Still good
+Da Nang,Apr,30,24,83,87,8,38,None,Getting hot. Beach season starts
+Da Nang,May,33,25,79,130,14,42,None,Hot. Humidity building
+Da Nang,Jun,34,26,76,96,19,43,Low,Peak heat. Still mostly dry
+Da Nang,Jul,34,26,75,122,18,43,Low,Hot. AC mode
+Da Nang,Aug,33,26,77,155,22,42,Moderate,Storms possible
+Da Nang,Sep,31,25,82,321,18,39,High,Rainy season peak. Typhoon risk
+Da Nang,Oct,29,24,84,434,14,36,High,Worst month. Flooding possible
+Da Nang,Nov,27,22,85,467,7,33,Moderate,Still very wet
+Da Nang,Dec,25,20,85,363,5,25,Low,"Cooling down, rain easing"
+Hong Kong,Jan,19,14,74,32,6,19,None,Cool and dry. Good month
+Hong Kong,Feb,20,15,78,52,9,20,None,CNY period. Foggy
+Hong Kong,Mar,22,18,82,76,10,22,None,Warming. Can be foggy/humid
+Hong Kong,Apr,26,22,83,129,11,26,None,"Warm, humid, rainy season starts"
+Hong Kong,May,29,25,83,222,15,36,Low,Hot and wet
+Hong Kong,Jun,31,27,82,330,19,39,Moderate,Typhoon season begins
+Hong Kong,Jul,32,27,81,259,17,41,Moderate,Peak heat. Typhoons
+Hong Kong,Aug,32,27,81,319,17,41,High,Hottest. Typhoon peak
+Hong Kong,Sep,31,26,78,222,14,39,High,"Still hot, typhoons"
+Hong Kong,Oct,29,24,73,75,8,35,Moderate,"Best month. Dry, comfortable"
+Hong Kong,Nov,25,20,72,40,6,25,None,Excellent. Cool and dry
+Hong Kong,Dec,21,16,70,35,4,21,None,"Cool, dry. Christmas crowds"
